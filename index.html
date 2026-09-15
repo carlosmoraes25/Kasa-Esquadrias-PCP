@@ -915,6 +915,7 @@ function renderSidebar(){
     <div class="sidebar-foot">
       ${state.produtos.length} itens cadastrados<br>
       ${state.obras.length} obras · ${state.movimentacoes.filter(m=>!m.cancelado).length} movimentações
+      ${souAdmin() ? `<div style="margin-top:8px;"><span id="reimportar-btn" style="cursor:pointer;text-decoration:underline;font-size:11px;color:var(--amber);">↻ Reimportar base inicial</span></div>` : ''}
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid #33383f;display:flex;justify-content:space-between;align-items:center;">
         <span>${esc(state.perfil?.email||'')} <span class="badge ${souAdmin()?'ok':'neutral'}" style="margin-left:4px;">${souAdmin()?'Admin':'Operador'}</span></span>
         <span id="logout-btn" style="cursor:pointer;text-decoration:underline;">Sair</span>
@@ -1934,6 +1935,14 @@ function renderFornecedorModal(f){
 function attachEvents(){
   const logoutBtn = document.getElementById('logout-btn');
   if(logoutBtn) logoutBtn.addEventListener('click', fazerLogout);
+
+  const reimportarBtn = document.getElementById('reimportar-btn');
+  if(reimportarBtn) reimportarBtn.addEventListener('click', ()=>{
+    if(confirm('Reimportar a base inicial? Isso completa/atualiza os dados que faltarem (não duplica o que já existe).')){
+      state.precisaImportar = true;
+      render();
+    }
+  });
 
   $root.querySelectorAll('[data-nav]').forEach(el=>{
     el.addEventListener('click', ()=>{
