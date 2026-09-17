@@ -317,7 +317,8 @@ let state = {
   movimentacoes: [],
   pedidos: [],
   pedidoSelecionado: null,
-  compFiltro: 'todos', // todos | andamento | finalizada | vinculados | sem_vinculo
+  compFiltro: 'todos', // todos | andamento | finalizada | vinculados | sem_vinculo | estourou
+  compSearch: '',
   fatMesFiltro: '',
   obraParaVincular: null,
   vinculoBusca: '',
@@ -1213,7 +1214,7 @@ function renderObras(){
       (r.obra.pedido||'').toLowerCase().includes(busca)
     );
   }
-  rows.sort((a,b)=> b.custo - a.custo);
+  rows.sort((a,b)=> b.obra.id - a.obra.id);
   return `
   <div class="toolbar">
     <input type="text" class="search-input" id="obras-search" placeholder="Buscar por nome da obra ou nº do pedido…" value="${esc(state.obrasSearch)}">
@@ -1398,6 +1399,16 @@ function renderComparativo(){
   if(state.compFiltro==='finalizada') list = list.filter(p=>p.status==='Finalizada');
   if(state.compFiltro==='vinculados') list = list.filter(p=>p.obraId);
   if(state.compFiltro==='sem_vinculo') list = list.filter(p=>!p.obraId);
+  if(state.compFiltro==='estourou') list = list.filter(p=>{
+    const d = deltaPct(p.cmvsis, cmvRealCalc(p));
+    return d!==null && d>10;
+  });
+
+  const busca = state.compSearch.trim().toLowerCase();
+  if(busca) list = list.filter(p=> p.ped.toLowerCase().includes(busca));
+
+  // mais novos cadastrados primeiro
+  list.sort((a,b)=> b.id - a.id);
 
   const semVinculo = state.pedidos.filter(p=>!p.obraId).length;
   const estourou = state.pedidos.filter(p=>{
@@ -1409,15 +1420,18 @@ function renderComparativo(){
   <div class="grid-cards" style="margin-bottom:18px;">
     <div class="card"><div class="k">Pedidos importados</div><div class="v">${state.pedidos.length}</div><div class="foot">alumínio, vidro e acessório — sistema × real</div></div>
     <div class="card"><div class="k">Sem vínculo com obra</div><div class="v ${semVinculo>0?'amber':''}">${semVinculo}</div><div class="foot">acessório real fica com o valor da planilha importada</div></div>
-    <div class="card"><div class="k">CMV real acima do sistema (&gt;10%)</div><div class="v ${estourou>0?'amber':''}">${estourou}</div><div class="foot">obras que estouraram o custo previsto</div></div>
+    <div class="card" style="cursor:pointer;" data-compfilt="estourou"><div class="k">CMV real acima do sistema (&gt;10%)</div><div class="v ${estourou>0?'amber':''}">${estourou}</div><div class="foot">clique para filtrar</div></div>
   </div>
   <div class="toolbar">
+    <input type="text" class="search-input" id="comp-search" placeholder="Buscar por nome do pedido…" value="${esc(state.compSearch)}">
     <div class="pill-toggle">
       <button data-compfilt="todos" class="${state.compFiltro==='todos'?'active':''}">Todos</button>
       <button data-compfilt="andamento" class="${state.compFiltro==='andamento'?'active':''}">Em andamento</button>
       <button data-compfilt="finalizada" class="${state.compFiltro==='finalizada'?'active':''}">Finalizadas</button>
       <button data-compfilt="sem_vinculo" class="${state.compFiltro==='sem_vinculo'?'active':''}">Sem vínculo</button>
+      <button data-compfilt="estourou" class="${state.compFiltro==='estourou'?'active':''}">Estourou</button>
     </div>
+    <div style="margin-left:auto;color:var(--ink-soft);font-size:12px;">${list.length} pedido(s)</div>
   </div>
   <div class="table-wrap table-scroll">
   <table>
@@ -2096,6 +2110,10 @@ function attachEvents(){
   $root.querySelectorAll('[data-compfilt]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.compFiltro = el.getAttribute('data-compfilt'); render(); });
   });
+  const compSearch = document.getElementById('comp-search');
+  if(compSearch){
+    compSearch.addEventListener('input', e=>{ state.compSearch = e.target.value; render(); preserveFocus('comp-search'); });
+  }
   $root.querySelectorAll('[data-pedido]').forEach(el=>{
     el.addEventListener('click', ()=>{
       state.pedidoSelecionado = Number(el.getAttribute('data-pedido'));
