@@ -1214,7 +1214,14 @@ function renderObras(){
       (r.obra.pedido||'').toLowerCase().includes(busca)
     );
   }
-  rows.sort((a,b)=> b.obra.id - a.obra.id);
+  rows.sort((a,b)=>{
+    const pa = pedidoDaObra(a.obra.id);
+    const pb = pedidoDaObra(b.obra.id);
+    const ka = pa ? pa.id : -1;
+    const kb = pb ? pb.id : -1;
+    if(ka !== kb) return kb - ka;
+    return b.obra.id - a.obra.id;
+  });
   return `
   <div class="toolbar">
     <input type="text" class="search-input" id="obras-search" placeholder="Buscar por nome da obra ou nº do pedido…" value="${esc(state.obrasSearch)}">
