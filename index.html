@@ -467,6 +467,8 @@ function rowToPed(r){
 
 function souAdmin(){ return state.perfil && state.perfil.role === 'admin'; }
 function souFabrica(){ return state.perfil && state.perfil.role === 'fabrica'; }
+function podeCadastrarObra(){ return souAdmin() || souFabrica(); }
+
 function rotuloPerfil(){
   const r = state.perfil && state.perfil.role;
   if(r==='admin') return 'Admin';
@@ -1207,7 +1209,7 @@ function renderObras(){
   return `
   <div class="toolbar">
     <div style="margin-left:auto;">
-      ${souAdmin() ? '<button data-open-modal="obra">+ Nova obra</button>' : ''}
+      ${podeCadastrarObra() ? '<button data-open-modal="obra">+ Nova obra</button>' : ''}
     </div>
   </div>
   ${rows.length===0 ? `<div class="empty"><b>Nenhuma obra cadastrada</b>Cadastre uma obra para começar a controlar o custo de material por obra.</div>` : `
