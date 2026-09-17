@@ -466,6 +466,13 @@ function rowToPed(r){
 }
 
 function souAdmin(){ return state.perfil && state.perfil.role === 'admin'; }
+function souFabrica(){ return state.perfil && state.perfil.role === 'fabrica'; }
+function rotuloPerfil(){
+  const r = state.perfil && state.perfil.role;
+  if(r==='admin') return 'Admin';
+  if(r==='fabrica') return 'Fábrica';
+  return 'Operador';
+}
 
 async function fetchAll(table, mapper){
   let all = [];
@@ -885,7 +892,7 @@ function attachImportarEvents(){
 
 function renderSidebar(){
   const reposicaoCount = itensReposicao().length;
-  const items = [
+  let items = [
     ['dashboard','Painel','◆'],
     ['estoque','Estoque','▤'],
     ['movimentacao','Registrar Movimentação','⇄'],
@@ -897,6 +904,10 @@ function renderSidebar(){
     ['historico','Histórico','☰'],
     ['fornecedores','Fornecedores','⊞'],
   ];
+  if(souFabrica()){
+    const ocultosParaFabrica = ['faturamento','necessidade'];
+    items = items.filter(([id])=> !ocultosParaFabrica.includes(id));
+  }
   return `
   <div class="sidebar">
     <div class="brand">
@@ -917,7 +928,7 @@ function renderSidebar(){
       ${state.obras.length} obras · ${state.movimentacoes.filter(m=>!m.cancelado).length} movimentações
       ${souAdmin() ? `<div style="margin-top:8px;"><span id="reimportar-btn" style="cursor:pointer;text-decoration:underline;font-size:11px;color:var(--amber);">↻ Reimportar base inicial</span></div>` : ''}
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid #33383f;display:flex;justify-content:space-between;align-items:center;">
-        <span>${esc(state.perfil?.email||'')} <span class="badge ${souAdmin()?'ok':'neutral'}" style="margin-left:4px;">${souAdmin()?'Admin':'Operador'}</span></span>
+        <span>${esc(state.perfil?.email||'')} <span class="badge ${souAdmin()?'ok':'neutral'}" style="margin-left:4px;">${rotuloPerfil()}</span></span>
         <span id="logout-btn" style="cursor:pointer;text-decoration:underline;">Sair</span>
       </div>
     </div>
@@ -958,8 +969,8 @@ function renderView(){
     case 'movimentacao': return renderMovimentacao();
     case 'obras': return state.obraSelecionada ? renderObraDetail() : renderObras();
     case 'comparativo': return state.pedidoSelecionado ? renderPedidoDetail() : renderComparativo();
-    case 'faturamento': return renderFaturamento();
-    case 'necessidade': return renderNecessidade();
+    case 'faturamento': return souFabrica() ? renderDashboard() : renderFaturamento();
+    case 'necessidade': return souFabrica() ? renderDashboard() : renderNecessidade();
     case 'vinculos': return renderVinculos();
     case 'historico': return renderHistorico();
     case 'fornecedores': return renderFornecedores();
