@@ -324,6 +324,7 @@ let state = {
   vinculoVerTodos: false,
   // ui state
   estoqueSearch: '',
+  obrasSearch: '',
   estoqueFiltro: 'todos', // todos | reposicao
   histFiltro: { tipo: 'todos', obraId: '', busca: '' },
   obraSelecionada: null,
@@ -1204,15 +1205,23 @@ function renderMovimentacao(){
 
 /* ---- OBRAS ---- */
 function renderObras(){
-  const rows = state.obras.map(o=>({obra:o, custo:custoObra(o.id), n:itensObra(o.id).length}))
-    .sort((a,b)=> b.custo - a.custo);
+  let rows = state.obras.map(o=>({obra:o, custo:custoObra(o.id), n:itensObra(o.id).length}));
+  const busca = state.obrasSearch.trim().toLowerCase();
+  if(busca){
+    rows = rows.filter(r=>
+      r.obra.n.toLowerCase().includes(busca) ||
+      (r.obra.pedido||'').toLowerCase().includes(busca)
+    );
+  }
+  rows.sort((a,b)=> b.custo - a.custo);
   return `
   <div class="toolbar">
+    <input type="text" class="search-input" id="obras-search" placeholder="Buscar por nome da obra ou nº do pedido…" value="${esc(state.obrasSearch)}">
     <div style="margin-left:auto;">
       ${podeCadastrarObra() ? '<button data-open-modal="obra">+ Nova obra</button>' : ''}
     </div>
   </div>
-  ${rows.length===0 ? `<div class="empty"><b>Nenhuma obra cadastrada</b>Cadastre uma obra para começar a controlar o custo de material por obra.</div>` : `
+  ${rows.length===0 ? `<div class="empty"><b>${busca ? 'Nenhuma obra encontrada' : 'Nenhuma obra cadastrada'}</b>${busca ? 'Tente buscar por outro nome ou número de pedido.' : 'Cadastre uma obra para começar a controlar o custo de material por obra.'}</div>` : `
   <div class="obras-grid">
     ${rows.map(r=>`
       <div class="obra-card" data-obra="${r.obra.id}">
@@ -2159,6 +2168,11 @@ function attachEvents(){
   const estSearch = document.getElementById('estoque-search');
   if(estSearch){
     estSearch.addEventListener('input', e=>{ state.estoqueSearch = e.target.value; render(); preserveFocus('estoque-search'); });
+  }
+  // obras
+  const obrasSearch = document.getElementById('obras-search');
+  if(obrasSearch){
+    obrasSearch.addEventListener('input', e=>{ state.obrasSearch = e.target.value; render(); preserveFocus('obras-search'); });
   }
   $root.querySelectorAll('[data-estfilt]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.estoqueFiltro = el.getAttribute('data-estfilt'); render(); });
