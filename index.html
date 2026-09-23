@@ -1654,6 +1654,17 @@ function renderVinculos(){
   const busca = state.vinculoBusca.trim().toLowerCase();
   const obraAtual = state.obraParaVincular ? obraById(state.obraParaVincular) : null;
 
+  // pré-calcula a melhor sugestão de cada obra sem vínculo, pra já mostrar direto na linha
+  const melhorSugestao = {};
+  ordenadas.forEach(o=>{
+    let melhor = null, melhorScore = 0;
+    pedidosDisponiveis.forEach(p=>{
+      const score = similaridadeNomes(o.n, p.ped);
+      if(score>melhorScore){ melhorScore = score; melhor = p; }
+    });
+    if(melhor) melhorSugestao[o.id] = melhor;
+  });
+
   let sugestoes = [];
   if(obraAtual){
     if(busca.length>0){
@@ -1671,15 +1682,25 @@ function renderVinculos(){
   }
 
   return `
-  <div class="hint" style="margin-bottom:16px;">${semVinculo.length} obra(s) do estoque ainda não têm um pedido vinculado no Comparativo/Faturamento. As com movimentação de material aparecem primeiro — são as mais importantes de vincular.</div>
+  <div class="hint" style="margin-bottom:16px;">${semVinculo.length} obra(s) do estoque ainda não têm um pedido vinculado no Comparativo/Faturamento. As com movimentação de material aparecem primeiro — são as mais importantes de vincular. Quando o sistema acha um pedido parecido, já aparece pronto pra confirmar num clique.</div>
 
   <div class="table-wrap table-scroll"><table>
-    <thead><tr><th>Obra (estoque)</th><th class="num">Custo já lançado</th><th>Vínculo</th></tr></thead>
+    <thead><tr><th>Obra (estoque)</th><th class="num">Custo já lançado</th><th>Sugestão de pedido</th><th>Vínculo</th></tr></thead>
     <tbody>
-      ${ordenadas.length===0 ? `<tr><td colspan="3"><div class="empty">Todas as obras já estão vinculadas. 🎉</div></td></tr>` : ordenadas.map(o=>`
+      ${ordenadas.length===0 ? `<tr><td colspan="4"><div class="empty">Todas as obras já estão vinculadas. 🎉</div></td></tr>` : ordenadas.map(o=>{
+        const sug = melhorSugestao[o.id];
+        return `
       <tr>
         <td><b>${esc(o.n)}</b>${o.pedido?` <span style="color:var(--ink-soft);font-size:11.5px;">· nº ${esc(o.pedido)}</span>`:''}</td>
         <td class="num">${fmtMoney(custoObra(o.id))}</td>
+        <td>
+          ${state.obraParaVincular!==o.id && sug ? `
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:12.5px;">${esc(sug.ped)}</span>
+              <button class="secondary small" data-confirmar-direto="${o.id}:${sug.id}">Confirmar</button>
+            </div>
+          ` : (state.obraParaVincular!==o.id ? '<span style="color:var(--ink-soft);font-size:12px;">sem sugestão parecida</span>' : '')}
+        </td>
         <td>
           ${state.obraParaVincular===o.id ? `
             <div class="autocomplete" style="position:relative;max-width:380px;">
@@ -1693,7 +1714,8 @@ function renderVinculos(){
             </div>
           ` : (souAdmin() ? `<button class="secondary small" data-iniciar-vinculo="${o.id}">Vincular a um pedido</button>` : '<span class="badge neutral">—</span>')}
         </td>
-      </tr>`).join('')}
+      </tr>`;
+      }).join('')}
     </tbody>
   </table></div>
   `;
@@ -1727,6 +1749,8 @@ function renderPedidoDetail(){
     <div class="card"><div class="k">Obra vinculada no estoque</div><div class="v" style="font-size:15px;">${obra?esc(obra.n):'—'}</div></div>
     <div class="card"><div class="k">Diferença de CMV</div><div class="v" style="font-size:20px;">${badgeDeltaCusto(p.cmvsis, cmvReal)}</div></div>
   </div>
+
+  ${souAdmin() && !obra ? `<div style="margin-bottom:16px;"><button class="danger small" id="excluir-pedido-btn">Excluir este pedido</button> <span class="hint">— sem obra vinculada, pode excluir se não for mais relevante.</span></div>` : ''}
 
   <!-- seção "Faturamento" temporariamente oculta aqui no Comparativo (segue em construção) -->
 
@@ -2017,6 +2041,8 @@ function attachEvents(){
   });
   const excluirObraBtn = document.getElementById('excluir-obra-btn');
   if(excluirObraBtn) excluirObraBtn.addEventListener('click', excluirObra);
+  const excluirPedidoBtn = document.getElementById('excluir-pedido-btn');
+  if(excluirPedidoBtn) excluirPedidoBtn.addEventListener('click', excluirPedido);
 
   $root.querySelectorAll('[data-nav]').forEach(el=>{
     el.addEventListener('click', ()=>{
@@ -2196,6 +2222,25 @@ function attachEvents(){
   }
   $root.querySelectorAll('[data-ver-todos-vinculo]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.vinculoVerTodos = true; render(); });
+  });
+  $root.querySelectorAll('[data-confirmar-direto]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const [obraIdStr, pedIdStr] = el.getAttribute('data-confirmar-direto').split(':');
+      const obraId = Number(obraIdStr), pedId = Number(pedIdStr);
+      const ped = state.pedidos.find(p=>p.id===pedId);
+      if(!ped) return;
+      ped.obraId = obraId;
+      ped.autoVinculo = false;
+      const obra = obraById(obraId);
+      let obraTocada;
+      if(obra && !obra.pedido){
+        const numeros = ped.ped.match(/\d{1,4}-\d{4}/g);
+        if(numeros && numeros.length){ obra.pedido = numeros[numeros.length-1]; obraTocada = obra; }
+      }
+      persist(obraTocada ? ['pedidos','obras'] : ['pedidos'], {pedidos:ped, obras:obraTocada});
+      showToast('Vínculo confirmado.');
+      render();
+    });
   });
   $root.querySelectorAll('[data-confirmar-vinculo]').forEach(el=>{
     el.addEventListener('click', ()=>{
@@ -2523,6 +2568,18 @@ function salvarProduto(){
     const qtdEl = document.getElementById('lote-item-qtd');
     if(qtdEl) qtdEl.focus();
   }
+}
+
+async function excluirPedido(){
+  const p = state.pedidos.find(x=>x.id===state.pedidoSelecionado);
+  if(!p) return;
+  if(p.obraId){ showToast('Esse pedido está vinculado a uma obra — desvincule antes de excluir.', 'error'); return; }
+  if(!confirm(`Excluir o pedido "${p.ped}"? Isso não pode ser desfeito.`)) return;
+  state.pedidos = state.pedidos.filter(x=>x.id!==p.id);
+  await excluirUm('pedidos', p.id);
+  state.pedidoSelecionado = null;
+  showToast('Pedido excluído.');
+  render();
 }
 
 async function excluirObra(){
