@@ -1153,7 +1153,7 @@ function renderMovimentacao(){
         <label>Obra (centro de custo)${f.tipo==='Devolução' ? ' — obra de origem' : ''}</label>
         <select id="lote-obra">
           <option value="">Selecione a obra…</option>
-          ${state.obras.map(o=>`<option value="${o.id}" ${String(f.obraId)===String(o.id)?'selected':''}>${esc(o.n)}</option>`).join('')}
+          ${[...state.obras].sort((a,b)=>a.n.localeCompare(b.n)).map(o=>`<option value="${o.id}" ${String(f.obraId)===String(o.id)?'selected':''}>${esc(o.n)}${o.pedido?` — Pedido ${esc(o.pedido)}`:''}</option>`).join('')}
         </select>
         ${f.tipo==='Saída' ? `<div class="hint">Não achou a obra? <span style="text-decoration:underline;cursor:pointer;" id="lote-nova-obra">cadastrar nova obra</span></div>` : ''}
       </div>
@@ -2150,7 +2150,15 @@ function attachEvents(){
       const ped = state.pedidos.find(x=>x.id===state.pedidoSelecionado);
       ped.obraId = e.target.value ? Number(e.target.value) : null;
       ped.autoVinculo = false;
-      persist(['pedidos'], {pedidos:ped});
+      let obraTocada;
+      if(ped.obraId){
+        const obra = obraById(ped.obraId);
+        if(obra && !obra.pedido){
+          const numeros = ped.ped.match(/\d{1,4}-\d{4}/g);
+          if(numeros && numeros.length){ obra.pedido = numeros[numeros.length-1]; obraTocada = obra; }
+        }
+      }
+      persist(obraTocada ? ['pedidos','obras'] : ['pedidos'], {pedidos:ped, obras:obraTocada});
       showToast('Vínculo atualizado.');
       render();
     });
@@ -2180,7 +2188,12 @@ function attachEvents(){
       const ped = state.pedidos.find(p=>p.id===pedId);
       ped.obraId = state.obraParaVincular;
       ped.autoVinculo = false;
-      persist(['pedidos'], {pedidos:ped});
+      const obra = obraById(state.obraParaVincular);
+      if(obra && !obra.pedido){
+        const numeros = ped.ped.match(/\d{1,4}-\d{4}/g);
+        if(numeros && numeros.length) obra.pedido = numeros[numeros.length-1];
+      }
+      persist(['pedidos','obras'], {pedidos:ped, obras:obra});
       showToast('Vínculo confirmado.');
       state.obraParaVincular = null;
       state.vinculoBusca = '';
@@ -2500,23 +2513,37 @@ function salvarObra(){
   const nova = { id: nextId(state.obras), n: nome, st: 'Ativa', pedido: pedido, listasCorte: [] };
   state.obras.push(nova);
 
-  const novoPedido = {
-    id: nextId(state.pedidos),
-    ped: `${nome} — Pedido ${pedido}`,
-    status: 'Em andamento',
-    casis, cvsis, caesis, cmvsis,
-    careal: null, cvreal: null, caereal: null, cmvreal: null,
-    abkg: pbkg, alkg: plkg, vidm2,
-    pbruto: null, pliq: null, sucata: null,
-    obraId: nova.id, autoVinculo: false,
-    valorVenda: valorVenda, etapasFaturamento: []
-  };
-  state.pedidos.push(novoPedido);
+  // se já existir um pedido importado (sem obra vinculada) com esse número, usa ele —
+  // evita duplicar e perder os dados de custo sistema que já vieram da planilha.
+  const pedidoExistente = state.pedidos.find(p => !p.obraId && p.ped.toUpperCase().includes(pedido.toUpperCase()));
+  let pedidoTocado;
+  if(pedidoExistente){
+    pedidoExistente.obraId = nova.id;
+    pedidoExistente.autoVinculo = false;
+    if(pedidoExistente.valorVenda===undefined || pedidoExistente.valorVenda===null) pedidoExistente.valorVenda = valorVenda;
+    if(pedidoExistente.abkg===undefined || pedidoExistente.abkg===null) pedidoExistente.abkg = pbkg;
+    if(pedidoExistente.alkg===undefined || pedidoExistente.alkg===null) pedidoExistente.alkg = plkg;
+    if(pedidoExistente.vidm2===undefined || pedidoExistente.vidm2===null) pedidoExistente.vidm2 = vidm2;
+    pedidoTocado = pedidoExistente;
+  } else {
+    pedidoTocado = {
+      id: nextId(state.pedidos),
+      ped: `${nome} — Pedido ${pedido}`,
+      status: 'Em andamento',
+      casis, cvsis, caesis, cmvsis,
+      careal: null, cvreal: null, caereal: null, cmvreal: null,
+      abkg: pbkg, alkg: plkg, vidm2,
+      pbruto: null, pliq: null, sucata: null,
+      obraId: nova.id, autoVinculo: false,
+      valorVenda: valorVenda, etapasFaturamento: []
+    };
+    state.pedidos.push(pedidoTocado);
+  }
 
-  persist(['obras','pedidos'], {obras:nova, pedidos:novoPedido});
+  persist(['obras','pedidos'], {obras:nova, pedidos:pedidoTocado});
   state.modal = null;
   if(state.view==='movimentacao'){ state.movLote.obraId = nova.id; }
-  showToast('Obra cadastrada e vinculada ao comparativo.');
+  showToast(pedidoExistente ? 'Obra cadastrada e vinculada a um pedido já existente.' : 'Obra cadastrada e vinculada ao comparativo.');
   render();
 }
 
