@@ -896,6 +896,9 @@ function attachImportarEvents(){
 
 function renderSidebar(){
   const reposicaoCount = itensReposicao().length;
+  // temporariamente escondidas do menu pra todo mundo (em construção) — o código continua
+  // funcionando por baixo, é só reaparecer aqui quando quiser reativar.
+  const ABAS_TEMP_OCULTAS = ['faturamento','necessidade'];
   let items = [
     ['dashboard','Painel','◆'],
     ['estoque','Estoque','▤'],
@@ -908,10 +911,7 @@ function renderSidebar(){
     ['historico','Histórico','☰'],
     ['fornecedores','Fornecedores','⊞'],
   ];
-  if(souFabrica()){
-    const ocultosParaFabrica = ['faturamento','necessidade'];
-    items = items.filter(([id])=> !ocultosParaFabrica.includes(id));
-  }
+  items = items.filter(([id])=> !ABAS_TEMP_OCULTAS.includes(id));
   return `
   <div class="sidebar">
     <div class="brand">
@@ -973,8 +973,8 @@ function renderView(){
     case 'movimentacao': return renderMovimentacao();
     case 'obras': return state.obraSelecionada ? renderObraDetail() : renderObras();
     case 'comparativo': return state.pedidoSelecionado ? renderPedidoDetail() : renderComparativo();
-    case 'faturamento': return souFabrica() ? renderDashboard() : renderFaturamento();
-    case 'necessidade': return souFabrica() ? renderDashboard() : renderNecessidade();
+    case 'faturamento': return renderDashboard();
+    case 'necessidade': return renderDashboard();
     case 'vinculos': return renderVinculos();
     case 'historico': return renderHistorico();
     case 'fornecedores': return renderFornecedores();
