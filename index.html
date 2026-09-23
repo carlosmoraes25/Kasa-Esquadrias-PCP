@@ -1697,7 +1697,7 @@ function renderVinculos(){
           ${state.obraParaVincular!==o.id && sug ? `
             <div style="display:flex;align-items:center;gap:8px;">
               <span style="font-size:12.5px;">${esc(sug.ped)}</span>
-              <button class="secondary small" data-confirmar-direto="${o.id}:${sug.id}">Confirmar</button>
+              ${souAdmin() ? `<button class="secondary small" data-confirmar-direto="${o.id}:${sug.id}">Confirmar</button>` : ''}
             </div>
           ` : (state.obraParaVincular!==o.id ? '<span style="color:var(--ink-soft);font-size:12px;">sem sugestão parecida</span>' : '')}
         </td>
