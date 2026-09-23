@@ -437,10 +437,10 @@ function rowToObra(r){
   return { id: r.id, n: r.nome, pedido: r.pedido, st: r.status || 'Ativa', listasCorte: r.listas_corte || [] };
 }
 function fornecedorToRow(f){
-  return { id: f.id, nome: f.n, contato: f.contato || null, telefone: f.telefone || null, email: f.email || null, endereco: f.endereco || null };
+  return { id: f.id, nome: f.n, contato: f.contato || null, telefone: f.telefone || null, email: f.email || null, endereco: f.endereco || null, fonte: f.fonte || null };
 }
 function rowToFornecedor(r){
-  return { id: r.id, n: r.nome, contato: r.contato, telefone: r.telefone, email: r.email, endereco: r.endereco };
+  return { id: r.id, n: r.nome, contato: r.contato, telefone: r.telefone, email: r.email, endereco: r.endereco, fonte: r.fonte };
 }
 function movToRow(m){
   return { id: m.id, tipo: m.tipo, produto_id: m.produtoId, quantidade: m.qtd, obra_id: m.obraId || null,
@@ -1856,25 +1856,28 @@ function renderHistorico(){
 }
 
 /* ---- FORNECEDORES ---- */
+function podeGerenciarFornecedor(){ return souAdmin() || souFabrica(); }
+
 function renderFornecedores(){
   const list = [...state.fornecedores].sort((a,b)=>a.n.localeCompare(b.n));
   return `
   <div class="toolbar">
-    <div style="margin-left:auto;">${souAdmin() ? '<button data-open-modal="fornecedor">+ Novo fornecedor</button>' : ''}</div>
+    <div style="margin-left:auto;">${podeGerenciarFornecedor() ? '<button data-open-modal="fornecedor">+ Novo fornecedor</button>' : ''}</div>
   </div>
   <div class="table-wrap table-scroll">
   <table>
-    <thead><tr><th>Fornecedor</th><th>Contato</th><th>Telefone</th><th>E-mail</th><th>Endereço</th><th class="num">Itens</th><th></th></tr></thead>
+    <thead><tr><th>Fornecedor</th><th>Contato</th><th>Telefone</th><th>E-mail</th><th>Endereço</th><th>Fonte</th><th class="num">Itens</th><th></th></tr></thead>
     <tbody>
-      ${list.length===0 ? `<tr><td colspan="7"><div class="empty">Nenhum fornecedor cadastrado.</div></td></tr>` : list.map(fo=>`
+      ${list.length===0 ? `<tr><td colspan="8"><div class="empty">Nenhum fornecedor cadastrado.</div></td></tr>` : list.map(fo=>`
       <tr>
         <td><b>${esc(fo.n)}</b></td>
         <td>${esc(fo.contato)||'—'}</td>
         <td>${esc(fo.telefone)||'—'}</td>
         <td>${esc(fo.email)||'—'}</td>
         <td>${esc(fo.endereco)||'—'}</td>
+        <td>${esc(fo.fonte)||'—'}</td>
         <td class="num">${state.produtos.filter(p=>p.f===fo.n).length}</td>
-        <td>${souAdmin() ? `<button class="secondary small" data-edit-fornecedor="${fo.id}">Editar</button>` : ''}</td>
+        <td>${podeGerenciarFornecedor() ? `<button class="secondary small" data-edit-fornecedor="${fo.id}">Editar</button>` : ''}</td>
       </tr>`).join('')}
     </tbody>
   </table>
@@ -1938,8 +1941,8 @@ function renderObraModal(){
   <div class="modal-bg" data-close-modal="1">
     <div class="modal" data-stop="1">
       <h3>Nova obra</h3>
-      <div class="form-row"><label>Nome da obra / cliente</label><input type="text" id="of-nome" placeholder="ex: Obra João da Silva"></div>
-      <div class="form-row"><label>Número do pedido</label><input type="text" id="of-pedido" placeholder="ex: 540-2025"></div>
+      <div class="form-row"><label>Nome da obra / cliente *</label><input type="text" id="of-nome" placeholder="ex: Obra João da Silva" required></div>
+      <div class="form-row"><label>Número do pedido *</label><input type="text" id="of-pedido" placeholder="ex: 540-2025" required></div>
       <div class="form-row"><label>Valor de venda (R$)</label><input type="number" step="0.01" id="of-valorvenda" placeholder="0,00"></div>
       <div class="hint" style="margin:-8px 0 14px 0;">Nome e número do pedido são obrigatórios — é o que mantém a obra vinculada ao comparativo Sistema × Real. O valor de venda pode ser preenchido depois, se ainda não tiver.</div>
 
@@ -1968,7 +1971,7 @@ function renderObraModal(){
 
 function renderFornecedorModal(f){
   const editing = !!f;
-  f = f || {n:'',contato:'',telefone:'',email:'',endereco:''};
+  f = f || {n:'',contato:'',telefone:'',email:'',endereco:'',fonte:''};
   return `
   <div class="modal-bg" data-close-modal="1">
     <div class="modal" data-stop="1">
@@ -1980,6 +1983,8 @@ function renderFornecedorModal(f){
         <div class="form-row"><label>E-mail</label><input type="text" id="ff-email" value="${esc(f.email)}"></div>
       </div>
       <div class="form-row"><label>Endereço</label><input type="text" id="ff-endereco" value="${esc(f.endereco)}"></div>
+      <div class="form-row"><label>Fonte</label><input type="text" id="ff-fonte" value="${esc(f.fonte)}" placeholder="ex: indicação, feira, Google, WhatsApp..."></div>
+      <div class="hint" style="margin:-8px 0 4px 0;">De onde veio esse contato — útil pra lembrar depois.</div>
       <div class="form-actions">
         <button id="ff-save">${editing?'Salvar alterações':'Cadastrar fornecedor'}</button>
         <button class="secondary" data-close-modal="1">Cancelar</button>
@@ -2525,15 +2530,16 @@ function salvarFornecedor(){
   const telefone = document.getElementById('ff-telefone').value.trim();
   const email = document.getElementById('ff-email').value.trim();
   const endereco = document.getElementById('ff-endereco').value.trim();
+  const fonte = document.getElementById('ff-fonte').value.trim();
 
   const editing = state.modal.editing;
   let salvo;
   if(editing){
     editing.n = nome; editing.contato = contato; editing.telefone = telefone;
-    editing.email = email; editing.endereco = endereco;
+    editing.email = email; editing.endereco = endereco; editing.fonte = fonte;
     salvo = editing;
   } else {
-    salvo = { id: nextId(state.fornecedores), n: nome, contato, telefone, email, endereco };
+    salvo = { id: nextId(state.fornecedores), n: nome, contato, telefone, email, endereco, fonte };
     state.fornecedores.push(salvo);
   }
   persist(['fornecedores'], {fornecedores:salvo});
