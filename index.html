@@ -349,6 +349,7 @@ let state = {
   movLoteProdutoSel: null, // produto escolhido, aguardando quantidade
   movLoteQtd: '',
   movLoteItemPreco: '',
+  movLoteListaCorte: '',
   movLoteVertente: 'acessorio',
   acOpen: false,
   acIndex: -1,
@@ -454,13 +455,13 @@ function movToRow(m){
   return { id: m.id, tipo: m.tipo, produto_id: m.produtoId, quantidade: m.qtd, obra_id: m.obraId || null,
     fornecedor_id: m.fornecedorId || null, responsavel: m.responsavel || null, motivo: m.motivo || null,
     data: m.data, preco: m.preco ?? null, vertente: m.vertente || null, cancelado: !!m.cancelado, historico: !!m.historico,
-    nao_afeta_estoque: !!m.naoAfetaEstoque };
+    nao_afeta_estoque: !!m.naoAfetaEstoque, lista_corte: m.listaCorte || null };
 }
 function rowToMov(r){
   return { id: r.id, tipo: r.tipo, produtoId: r.produto_id, qtd: r.quantidade, obraId: r.obra_id,
     fornecedorId: r.fornecedor_id, responsavel: r.responsavel, motivo: r.motivo, data: r.data,
     preco: r.preco, vertente: r.vertente, cancelado: r.cancelado, historico: r.historico,
-    naoAfetaEstoque: r.nao_afeta_estoque };
+    naoAfetaEstoque: r.nao_afeta_estoque, listaCorte: r.lista_corte };
 }
 function pedToRow(p){
   return { id: p.id, ped: p.ped, status: p.status, casis: p.casis, cvsis: p.cvsis, caesis: p.caesis, cmvsis: p.cmvsis,
@@ -1192,7 +1193,7 @@ function renderMovimentacao(){
     ${totalItens ? `
     <div class="table-wrap" style="margin-bottom:12px;">
       <table>
-        <thead><tr><th>Produto</th><th class="num">Qtd.</th>${f.tipo!=='Entrada'?'<th>Vertente</th>':''}${f.naoAfetaEstoque?'<th class="num">Preço</th>':''}<th></th></tr></thead>
+        <thead><tr><th>Produto</th><th class="num">Qtd.</th>${f.tipo!=='Entrada'?'<th>Vertente</th>':''}${f.naoAfetaEstoque?'<th class="num">Preço</th>':''}${f.tipo==='Saída'||f.tipo==='Devolução'?'<th>Lista de corte</th>':''}<th></th></tr></thead>
         <tbody>
           ${f.itens.map(it=>`
           <tr>
@@ -1200,6 +1201,7 @@ function renderMovimentacao(){
             <td class="num">${fmtQtd(it.qtd, it.unidade)}</td>
             ${f.tipo!=='Entrada'?`<td><span class="badge neutral">${esc(vertenteLabel(it.vertente))}</span></td>`:''}
             ${f.naoAfetaEstoque?`<td class="num">${it.precoManual!=null ? fmtMoney(it.precoManual) : `<span style="color:var(--ink-soft);">atual</span>`}</td>`:''}
+            ${f.tipo==='Saída'||f.tipo==='Devolução'?`<td>${esc(it.listaCorte)||'—'}</td>`:''}
             <td><button class="danger small" data-del-item-lote="${it.id}">Remover</button></td>
           </tr>`).join('')}
         </tbody>
@@ -1207,7 +1209,7 @@ function renderMovimentacao(){
     </div>` : `<div class="empty" style="margin-bottom:12px;">Nenhum item adicionado ainda — inclua abaixo.</div>`}
 
     <div class="autocomplete" style="position:relative;background:#faf8f3;border:1px solid var(--line);border-radius:3px;padding:14px;">
-      <div style="display:grid;grid-template-columns:${f.tipo!=='Entrada'?(f.naoAfetaEstoque?'2fr 1fr 1fr 1.3fr auto':'2fr 1fr 1.3fr auto'):'2fr 1fr auto'};gap:8px;align-items:end;">
+      <div style="display:grid;grid-template-columns:2fr 1fr${f.tipo==='Saída' && f.naoAfetaEstoque ? ' 1fr' : ''}${f.tipo!=='Entrada' ? ' 1fr' : ''}${f.tipo==='Saída'||f.tipo==='Devolução' ? ' 1fr' : ''} auto;gap:8px;align-items:end;">
         <div class="form-row" style="margin-bottom:0;">
           <label>Produto</label>
           ${state.movLoteProdutoSel ? `
@@ -1236,6 +1238,11 @@ function renderMovimentacao(){
           <select id="lote-item-vertente">
             ${Object.entries(VERTENTES).map(([code,v])=>`<option value="${code}" ${state.movLoteVertente===code?'selected':''}>${v.label}</option>`).join('')}
           </select>
+        </div>` : ''}
+        ${f.tipo==='Saída'||f.tipo==='Devolução' ? `
+        <div class="form-row" style="margin-bottom:0;">
+          <label>Lista de corte</label>
+          <input type="text" id="lote-item-listacorte" placeholder="opcional" value="${esc(state.movLoteListaCorte)}">
         </div>` : ''}
         <div><button id="lote-add-item">+ Adicionar</button></div>
       </div>
@@ -1317,6 +1324,16 @@ function renderObraDetail(){
     porProduto[key].valor += sinal*m.qtd*preco;
   });
   const itens = Object.values(porProduto).sort((a,b)=>b.valor-a.valor);
+  // aggregate by lista de corte
+  const porListaCorte = {};
+  movs.forEach(m=>{
+    const chave = m.listaCorte || '(sem lista de corte marcada)';
+    if(!porListaCorte[chave]) porListaCorte[chave] = 0;
+    const preco = precoNaMovimentacao(m);
+    const sinal = m.tipo==='Devolução' ? -1 : 1;
+    porListaCorte[chave] += sinal*m.qtd*preco;
+  });
+  const listasCusto = Object.entries(porListaCorte).sort((a,b)=>b[1]-a[1]);
   const listas = o.listasCorte || [];
   const pedLigado = pedidoDaObra(o.id);
 
@@ -1339,10 +1356,7 @@ function renderObraDetail(){
     </div>
   </section>
 
-  <section>
-    <div class="section-head"><h2>Faturamento</h2></div>
-    ${renderFaturamentoEditor(pedLigado, 'Vá em Comparativo, abra ou crie o pedido correspondente e vincule a esta obra.')}
-  </section>
+  <!-- seção "Faturamento" temporariamente oculta aqui também (segue em construção) -->
 
   <section>
     <div class="section-head"><h2>Listas de corte</h2></div>
@@ -1362,6 +1376,19 @@ function renderObraDetail(){
       </table>` : ''}
     </div>
   </section>
+
+  ${listasCusto.length>1 ? `
+  <section>
+    <div class="section-head"><h2>Custo por lista de corte</h2></div>
+    <div class="hint" style="margin-bottom:10px;">Marcada na hora de registrar a saída. O custo total da obra continua sendo a soma de tudo, mostrada lá em cima.</div>
+    <div class="table-wrap" style="max-width:500px;"><table>
+      <thead><tr><th>Lista de corte</th><th class="num">Custo</th></tr></thead>
+      <tbody>
+        ${listasCusto.map(([nome,valor])=>`<tr><td>${esc(nome)}</td><td class="num">${fmtMoney(valor)}</td></tr>`).join('')}
+      </tbody>
+    </table></div>
+  </section>
+  ` : ''}
 
   <section>
     <div class="section-head"><h2>Materiais aplicados</h2></div>
@@ -2484,6 +2511,11 @@ function attachEvents(){
     loteItemPreco.addEventListener('input', e=>{ state.movLoteItemPreco = e.target.value; });
     loteItemPreco.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarItemLote(); } });
   }
+  const loteItemListaCorte = document.getElementById('lote-item-listacorte');
+  if(loteItemListaCorte){
+    loteItemListaCorte.addEventListener('input', e=>{ state.movLoteListaCorte = e.target.value; });
+    loteItemListaCorte.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarItemLote(); } });
+  }
   const loteItemVertente = document.getElementById('lote-item-vertente');
   if(loteItemVertente) loteItemVertente.addEventListener('change', e=>{ state.movLoteVertente = e.target.value; });
   const loteAddItem = document.getElementById('lote-add-item');
@@ -2550,7 +2582,8 @@ function adicionarItemLote(){
     unidade: p.u,
     qtd: qtd,
     vertente: state.movLoteVertente,
-    precoManual: precoManual
+    precoManual: precoManual,
+    listaCorte: state.movLoteListaCorte.trim() || null
   });
   state.movLoteProdutoSel = null;
   state.movLoteBusca = '';
@@ -2594,7 +2627,8 @@ async function registrarLoteMovimentacoes(){
       preco: (item.precoManual!=null ? item.precoManual : produto.p) ?? null,
       vertente: (f.tipo==='Saída'||f.tipo==='Devolução') ? item.vertente : null,
       cancelado: false,
-      naoAfetaEstoque: pularEstoque
+      naoAfetaEstoque: pularEstoque,
+      listaCorte: item.listaCorte || null
     };
     state.movimentacoes.push(mov);
     novasMovs.push(mov);
