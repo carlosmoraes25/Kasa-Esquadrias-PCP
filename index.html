@@ -326,6 +326,10 @@ let state = {
   // ui state
   estoqueSearch: '',
   obrasSearch: '',
+  modoSelecaoObras: false,
+  obrasSelecionadas: new Set(),
+  modoSelecaoPedidos: false,
+  pedidosSelecionados: new Set(),
   estoqueFiltro: 'todos', // todos | reposicao
   histFiltro: { tipo: 'todos', obraId: '', busca: '' },
   obraSelecionada: null,
@@ -1248,22 +1252,32 @@ function renderObras(){
     if(ka !== kb) return kb - ka;
     return b.obra.id - a.obra.id;
   });
+  const qtdSelecionadas = state.obrasSelecionadas.size;
   return `
   <div class="toolbar">
     <input type="text" class="search-input" id="obras-search" placeholder="Buscar por nome da obra ou nº do pedido…" value="${esc(state.obrasSearch)}">
-    <div style="margin-left:auto;">
-      ${podeCadastrarObra() ? '<button data-open-modal="obra">+ Nova obra</button>' : ''}
+    <div style="margin-left:auto;display:flex;gap:8px;">
+      ${souAdmin() ? `<button class="secondary" id="toggle-selecao-obras">${state.modoSelecaoObras ? 'Cancelar seleção' : 'Selecionar várias'}</button>` : ''}
+      ${state.modoSelecaoObras ? `<button class="danger" id="excluir-selecionadas-obras" ${qtdSelecionadas===0?'disabled':''}>Excluir ${qtdSelecionadas} selecionada${qtdSelecionadas===1?'':'s'}</button>` : ''}
+      ${!state.modoSelecaoObras && podeCadastrarObra() ? '<button data-open-modal="obra">+ Nova obra</button>' : ''}
     </div>
   </div>
+  ${state.modoSelecaoObras ? `<div class="hint" style="margin-bottom:12px;">Só é possível excluir obras sem movimentação (0 saídas). As demais aparecem sem checkbox, por segurança.</div>` : ''}
   ${rows.length===0 ? `<div class="empty"><b>${busca ? 'Nenhuma obra encontrada' : 'Nenhuma obra cadastrada'}</b>${busca ? 'Tente buscar por outro nome ou número de pedido.' : 'Cadastre uma obra para começar a controlar o custo de material por obra.'}</div>` : `
   <div class="obras-grid">
-    ${rows.map(r=>`
-      <div class="obra-card" data-obra="${r.obra.id}">
-        <div class="nm">${esc(r.obra.n)}${r.obra.pedido ? ` <span style="font-weight:400;color:var(--ink-soft);font-size:11.5px;">· Pedido ${esc(r.obra.pedido)}</span>` : ''}</div>
-        <div class="cost">${fmtMoney(r.custo)}</div>
-        <div class="items">${r.n} saída(s) de material</div>
+    ${rows.map(r=>{
+      const podeExcluir = r.n===0;
+      const marcada = state.obrasSelecionadas.has(r.obra.id);
+      return `
+      <div class="obra-card" ${state.modoSelecaoObras ? '' : `data-obra="${r.obra.id}"`} style="${state.modoSelecaoObras ? 'display:flex;align-items:flex-start;gap:10px;' : ''}">
+        ${state.modoSelecaoObras ? `<input type="checkbox" data-select-obra="${r.obra.id}" ${marcada?'checked':''} ${podeExcluir?'':'disabled'} style="margin-top:3px;">` : ''}
+        <div style="flex:1;">
+          <div class="nm">${esc(r.obra.n)}${r.obra.pedido ? ` <span style="font-weight:400;color:var(--ink-soft);font-size:11.5px;">· Pedido ${esc(r.obra.pedido)}</span>` : ''}</div>
+          <div class="cost">${fmtMoney(r.custo)}</div>
+          <div class="items">${r.n} saída(s) de material${state.modoSelecaoObras && !podeExcluir ? ' <span style="color:var(--amber);">— tem movimentação, não pode excluir</span>' : ''}</div>
+        </div>
       </div>
-    `).join('')}
+    `;}).join('')}
   </div>`}
   `;
 }
@@ -1449,6 +1463,7 @@ function renderComparativo(){
     const d = deltaPct(p.cmvsis, cmvRealCalc(p));
     return d!==null && d>10;
   }).length;
+  const qtdSelecionados = state.pedidosSelecionados.size;
 
   return `
   <div class="grid-cards" style="margin-bottom:18px;">
@@ -1465,20 +1480,27 @@ function renderComparativo(){
       <button data-compfilt="sem_vinculo" class="${state.compFiltro==='sem_vinculo'?'active':''}">Sem vínculo</button>
       <button data-compfilt="estourou" class="${state.compFiltro==='estourou'?'active':''}">Estourou</button>
     </div>
+    ${souAdmin() ? `<button class="secondary" id="toggle-selecao-pedidos">${state.modoSelecaoPedidos ? 'Cancelar seleção' : 'Selecionar vários'}</button>` : ''}
+    ${state.modoSelecaoPedidos ? `<button class="danger" id="excluir-selecionados-pedidos" ${qtdSelecionados===0?'disabled':''}>Excluir ${qtdSelecionados} selecionado${qtdSelecionados===1?'':'s'}</button>` : ''}
     <div style="margin-left:auto;color:var(--ink-soft);font-size:12px;">${list.length} pedido(s)</div>
   </div>
+  ${state.modoSelecaoPedidos ? `<div class="hint" style="margin-bottom:12px;">Só é possível excluir pedidos sem obra vinculada — desvincule antes se precisar.</div>` : ''}
   <div class="table-wrap table-scroll">
   <table>
     <thead><tr>
+      ${state.modoSelecaoPedidos ? '<th></th>' : ''}
       <th>Pedido</th><th>Status</th><th>Obra vinculada</th>
       <th class="num">CMV Sistema</th><th class="num">CMV Real</th><th>Dif.</th>
     </tr></thead>
     <tbody>
-      ${list.length===0 ? `<tr><td colspan="6"><div class="empty">Nenhum pedido encontrado.</div></td></tr>` : list.map(p=>{
+      ${list.length===0 ? `<tr><td colspan="7"><div class="empty">Nenhum pedido encontrado.</div></td></tr>` : list.map(p=>{
         const real = cmvRealCalc(p);
         const obra = p.obraId ? obraById(p.obraId) : null;
+        const podeExcluir = !obra;
+        const marcado = state.pedidosSelecionados.has(p.id);
         return `
-        <tr data-pedido="${p.id}" style="cursor:pointer;">
+        <tr ${state.modoSelecaoPedidos ? '' : `data-pedido="${p.id}" style="cursor:pointer;"`}>
+          ${state.modoSelecaoPedidos ? `<td><input type="checkbox" data-select-pedido="${p.id}" ${marcado?'checked':''} ${podeExcluir?'':'disabled'}></td>` : ''}
           <td><b>${esc(p.ped)}</b></td>
           <td><span class="badge ${p.status==='Finalizada'?'neutral':'ok'}">${p.status}</span></td>
           <td>${obra ? esc(obra.n) + (p.autoVinculo ? ' <span class="badge neutral" style="font-size:9.5px;">sugerido</span>' : '') : '<span style="color:var(--ink-soft);">não vinculado</span>'}</td>
@@ -2044,6 +2066,40 @@ function attachEvents(){
   const excluirPedidoBtn = document.getElementById('excluir-pedido-btn');
   if(excluirPedidoBtn) excluirPedidoBtn.addEventListener('click', excluirPedido);
 
+  // seleção em lote — obras
+  const toggleSelObras = document.getElementById('toggle-selecao-obras');
+  if(toggleSelObras) toggleSelObras.addEventListener('click', ()=>{
+    state.modoSelecaoObras = !state.modoSelecaoObras;
+    state.obrasSelecionadas = new Set();
+    render();
+  });
+  $root.querySelectorAll('[data-select-obra]').forEach(el=>{
+    el.addEventListener('change', e=>{
+      const id = Number(el.getAttribute('data-select-obra'));
+      if(e.target.checked) state.obrasSelecionadas.add(id); else state.obrasSelecionadas.delete(id);
+      render();
+    });
+  });
+  const excluirSelObras = document.getElementById('excluir-selecionadas-obras');
+  if(excluirSelObras) excluirSelObras.addEventListener('click', excluirObrasSelecionadas);
+
+  // seleção em lote — pedidos
+  const toggleSelPedidos = document.getElementById('toggle-selecao-pedidos');
+  if(toggleSelPedidos) toggleSelPedidos.addEventListener('click', ()=>{
+    state.modoSelecaoPedidos = !state.modoSelecaoPedidos;
+    state.pedidosSelecionados = new Set();
+    render();
+  });
+  $root.querySelectorAll('[data-select-pedido]').forEach(el=>{
+    el.addEventListener('change', e=>{
+      const id = Number(el.getAttribute('data-select-pedido'));
+      if(e.target.checked) state.pedidosSelecionados.add(id); else state.pedidosSelecionados.delete(id);
+      render();
+    });
+  });
+  const excluirSelPedidos = document.getElementById('excluir-selecionados-pedidos');
+  if(excluirSelPedidos) excluirSelPedidos.addEventListener('click', excluirPedidosSelecionados);
+
   $root.querySelectorAll('[data-nav]').forEach(el=>{
     el.addEventListener('click', ()=>{
       state.view = el.getAttribute('data-nav');
@@ -2579,6 +2635,43 @@ async function excluirPedido(){
   await excluirUm('pedidos', p.id);
   state.pedidoSelecionado = null;
   showToast('Pedido excluído.');
+  render();
+}
+
+async function excluirObrasSelecionadas(){
+  const ids = [...state.obrasSelecionadas];
+  if(ids.length===0) return;
+  if(!confirm(`Excluir ${ids.length} obra(s) selecionada(s)? Isso não pode ser desfeito.`)) return;
+  state.saving = true; updateSaveIndicator();
+  for(const id of ids){
+    const pedLigado = pedidoDaObra(id);
+    if(pedLigado){
+      pedLigado.obraId = null;
+      await salvarUm('pedidos', pedLigado);
+    }
+    await excluirUm('obras', id);
+  }
+  state.obras = state.obras.filter(o=>!state.obrasSelecionadas.has(o.id));
+  state.obrasSelecionadas = new Set();
+  state.modoSelecaoObras = false;
+  state.saving = false; updateSaveIndicator();
+  showToast(`${ids.length} obra(s) excluída(s).`);
+  render();
+}
+
+async function excluirPedidosSelecionados(){
+  const ids = [...state.pedidosSelecionados];
+  if(ids.length===0) return;
+  if(!confirm(`Excluir ${ids.length} pedido(s) selecionado(s)? Isso não pode ser desfeito.`)) return;
+  state.saving = true; updateSaveIndicator();
+  for(const id of ids){
+    await excluirUm('pedidos', id);
+  }
+  state.pedidos = state.pedidos.filter(p=>!state.pedidosSelecionados.has(p.id));
+  state.pedidosSelecionados = new Set();
+  state.modoSelecaoPedidos = false;
+  state.saving = false; updateSaveIndicator();
+  showToast(`${ids.length} pedido(s) excluído(s).`);
   render();
 }
 
