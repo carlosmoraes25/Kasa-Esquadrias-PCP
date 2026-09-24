@@ -2496,9 +2496,9 @@ async function registrarLoteMovimentacoes(){
 
   state.saving = true; updateSaveIndicator();
   try{
-    const { error: errMov } = await supabase.from('movimentacoes').upsert(novasMovs.map(movToRow));
+    const { error: errMov } = await sbClient.from('movimentacoes').upsert(novasMovs.map(movToRow));
     if(errMov) throw errMov;
-    const { error: errProd } = await supabase.from('produtos').upsert([...produtosAfetados.values()].map(produtoToRow));
+    const { error: errProd } = await sbClient.from('produtos').upsert([...produtosAfetados.values()].map(produtoToRow));
     if(errProd) throw errProd;
     showToast(`${novasMovs.length} movimentação${novasMovs.length>1?'ões':''} registrada${novasMovs.length>1?'s':''}.`);
   }catch(e){
