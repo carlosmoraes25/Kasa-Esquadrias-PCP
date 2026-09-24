@@ -348,6 +348,7 @@ let state = {
   movLoteObraBusca: '',
   movLoteProdutoSel: null, // produto escolhido, aguardando quantidade
   movLoteQtd: '',
+  movLoteItemPreco: '',
   movLoteVertente: 'acessorio',
   acOpen: false,
   acIndex: -1,
@@ -1191,13 +1192,14 @@ function renderMovimentacao(){
     ${totalItens ? `
     <div class="table-wrap" style="margin-bottom:12px;">
       <table>
-        <thead><tr><th>Produto</th><th class="num">Qtd.</th>${f.tipo!=='Entrada'?'<th>Vertente</th>':''}<th></th></tr></thead>
+        <thead><tr><th>Produto</th><th class="num">Qtd.</th>${f.tipo!=='Entrada'?'<th>Vertente</th>':''}${f.naoAfetaEstoque?'<th class="num">Preço</th>':''}<th></th></tr></thead>
         <tbody>
           ${f.itens.map(it=>`
           <tr>
             <td>${esc(it.nome)}</td>
             <td class="num">${fmtQtd(it.qtd, it.unidade)}</td>
             ${f.tipo!=='Entrada'?`<td><span class="badge neutral">${esc(vertenteLabel(it.vertente))}</span></td>`:''}
+            ${f.naoAfetaEstoque?`<td class="num">${it.precoManual!=null ? fmtMoney(it.precoManual) : `<span style="color:var(--ink-soft);">atual</span>`}</td>`:''}
             <td><button class="danger small" data-del-item-lote="${it.id}">Remover</button></td>
           </tr>`).join('')}
         </tbody>
@@ -1205,7 +1207,7 @@ function renderMovimentacao(){
     </div>` : `<div class="empty" style="margin-bottom:12px;">Nenhum item adicionado ainda — inclua abaixo.</div>`}
 
     <div class="autocomplete" style="position:relative;background:#faf8f3;border:1px solid var(--line);border-radius:3px;padding:14px;">
-      <div style="display:grid;grid-template-columns:${f.tipo!=='Entrada'?'2fr 1fr 1.3fr auto':'2fr 1fr auto'};gap:8px;align-items:end;">
+      <div style="display:grid;grid-template-columns:${f.tipo!=='Entrada'?(f.naoAfetaEstoque?'2fr 1fr 1fr 1.3fr auto':'2fr 1fr 1.3fr auto'):'2fr 1fr auto'};gap:8px;align-items:end;">
         <div class="form-row" style="margin-bottom:0;">
           <label>Produto</label>
           ${state.movLoteProdutoSel ? `
@@ -1223,6 +1225,11 @@ function renderMovimentacao(){
           <label>Qtd.${state.movLoteProdutoSel ? ` (${unidadeLabel(state.movLoteProdutoSel.u)})` : ''}</label>
           <input type="number" id="lote-item-qtd" min="0" step="0.001" value="${esc(state.movLoteQtd)}" placeholder="0">
         </div>
+        ${f.tipo==='Saída' && f.naoAfetaEstoque ? `
+        <div class="form-row" style="margin-bottom:0;">
+          <label>Preço da época</label>
+          <input type="number" id="lote-item-preco" min="0" step="0.01" value="${esc(state.movLoteItemPreco)}" placeholder="${state.movLoteProdutoSel && state.movLoteProdutoSel.p!=null ? state.movLoteProdutoSel.p : '0'}">
+        </div>` : ''}
         ${f.tipo!=='Entrada' ? `
         <div class="form-row" style="margin-bottom:0;">
           <label>Vertente</label>
@@ -1232,6 +1239,7 @@ function renderMovimentacao(){
         </div>` : ''}
         <div><button id="lote-add-item">+ Adicionar</button></div>
       </div>
+      ${f.tipo==='Saída' && f.naoAfetaEstoque ? `<div class="hint" style="margin-top:8px;">Deixe "Preço da época" em branco pra usar o preço atual do produto.</div>` : ''}
       <div class="hint" style="margin-top:8px;">Dica: depois de digitar a quantidade, aperte Enter pra adicionar rápido e já ir pro próximo item.</div>
     </div>
 
@@ -2471,6 +2479,11 @@ function attachEvents(){
     loteItemQtd.addEventListener('input', e=>{ state.movLoteQtd = e.target.value; });
     loteItemQtd.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarItemLote(); } });
   }
+  const loteItemPreco = document.getElementById('lote-item-preco');
+  if(loteItemPreco){
+    loteItemPreco.addEventListener('input', e=>{ state.movLoteItemPreco = e.target.value; });
+    loteItemPreco.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarItemLote(); } });
+  }
   const loteItemVertente = document.getElementById('lote-item-vertente');
   if(loteItemVertente) loteItemVertente.addEventListener('change', e=>{ state.movLoteVertente = e.target.value; });
   const loteAddItem = document.getElementById('lote-add-item');
@@ -2528,17 +2541,21 @@ function adicionarItemLote(){
   if(!p){ showToast('Selecione um produto.', 'error'); return; }
   const qtd = parseFloat(state.movLoteQtd);
   if(!qtd || qtd<=0){ showToast('Informe uma quantidade válida.', 'error'); return; }
+  const precoManualTxt = state.movLoteItemPreco.trim();
+  const precoManual = precoManualTxt ? parseFloat(precoManualTxt) : null;
   state.movLote.itens.push({
     id: nextItemLoteId(),
     produtoId: p.id,
     nome: p.n,
     unidade: p.u,
     qtd: qtd,
-    vertente: state.movLoteVertente
+    vertente: state.movLoteVertente,
+    precoManual: precoManual
   });
   state.movLoteProdutoSel = null;
   state.movLoteBusca = '';
   state.movLoteQtd = '';
+  state.movLoteItemPreco = '';
   render();
   const buscaEl = document.getElementById('lote-produto-busca');
   if(buscaEl) buscaEl.focus();
@@ -2574,7 +2591,7 @@ async function registrarLoteMovimentacoes(){
       responsavel: f.responsavel || '',
       motivo: '',
       data: dataIso,
-      preco: produto.p ?? null,
+      preco: (item.precoManual!=null ? item.precoManual : produto.p) ?? null,
       vertente: (f.tipo==='Saída'||f.tipo==='Devolução') ? item.vertente : null,
       cancelado: false,
       naoAfetaEstoque: pularEstoque
