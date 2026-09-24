@@ -322,6 +322,7 @@ let state = {
   fatMesFiltro: '',
   obraParaVincular: null,
   vinculoBusca: '',
+  vinculosListaBusca: '',
   vinculoVerTodos: false,
   // ui state
   estoqueSearch: '',
@@ -1670,7 +1671,15 @@ function renderVinculos(){
   const semVinculo = state.obras.filter(o=> !pedidoDaObra(o.id));
   const comMovimento = semVinculo.filter(o=> custoObra(o.id)>0);
   const semMovimento = semVinculo.filter(o=> custoObra(o.id)<=0);
-  const ordenadas = [...comMovimento, ...semMovimento];
+  let ordenadas = [...comMovimento, ...semMovimento];
+
+  const buscaLista = state.vinculosListaBusca.trim().toLowerCase();
+  if(buscaLista){
+    ordenadas = ordenadas.filter(o=>
+      o.n.toLowerCase().includes(buscaLista) ||
+      (o.pedido||'').toLowerCase().includes(buscaLista)
+    );
+  }
 
   const pedidosDisponiveis = state.pedidos.filter(p=>!p.obraId);
   const busca = state.vinculoBusca.trim().toLowerCase();
@@ -1706,10 +1715,15 @@ function renderVinculos(){
   return `
   <div class="hint" style="margin-bottom:16px;">${semVinculo.length} obra(s) do estoque ainda não têm um pedido vinculado no Comparativo/Faturamento. As com movimentação de material aparecem primeiro — são as mais importantes de vincular. Quando o sistema acha um pedido parecido, já aparece pronto pra confirmar num clique.</div>
 
+  <div class="toolbar">
+    <input type="text" class="search-input" id="vinculos-lista-busca" placeholder="Buscar por nome da obra ou nº do pedido…" value="${esc(state.vinculosListaBusca)}">
+    <div style="margin-left:auto;color:var(--ink-soft);font-size:12px;">${ordenadas.length} de ${semVinculo.length}</div>
+  </div>
+
   <div class="table-wrap table-scroll"><table>
     <thead><tr><th>Obra (estoque)</th><th class="num">Custo já lançado</th><th>Sugestão de pedido</th><th>Vínculo</th></tr></thead>
     <tbody>
-      ${ordenadas.length===0 ? `<tr><td colspan="4"><div class="empty">Todas as obras já estão vinculadas. 🎉</div></td></tr>` : ordenadas.map(o=>{
+      ${ordenadas.length===0 ? `<tr><td colspan="4"><div class="empty">${buscaLista ? 'Nenhuma obra encontrada para essa busca.' : 'Todas as obras já estão vinculadas. 🎉'}</div></td></tr>` : ordenadas.map(o=>{
         const sug = melhorSugestao[o.id];
         return `
       <tr>
@@ -2343,6 +2357,10 @@ function attachEvents(){
   const obrasSearch = document.getElementById('obras-search');
   if(obrasSearch){
     obrasSearch.addEventListener('input', e=>{ state.obrasSearch = e.target.value; render(); preserveFocus('obras-search'); });
+  }
+  const vinculosListaBusca = document.getElementById('vinculos-lista-busca');
+  if(vinculosListaBusca){
+    vinculosListaBusca.addEventListener('input', e=>{ state.vinculosListaBusca = e.target.value; render(); preserveFocus('vinculos-lista-busca'); });
   }
   $root.querySelectorAll('[data-estfilt]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.estoqueFiltro = el.getAttribute('data-estfilt'); render(); });
