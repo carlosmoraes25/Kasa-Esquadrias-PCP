@@ -230,6 +230,17 @@
     .grid-cards{grid-template-columns:repeat(2,1fr);}
     .obras-grid{grid-template-columns:repeat(2,1fr);}
   }
+  .fat-table th, .fat-table td{vertical-align:top;}
+  .fat-table .fat-mat{background:#f2f2f2;}
+  .fat-table .fat-prod{background:#fbe4d5;}
+  .fat-table .fat-inst{background:#fff2cc;}
+  .fat-table select.fat-mes{font-size:11.5px; padding:3px 4px; max-width:84px;}
+  .fat-x-lab{display:flex; align-items:center; gap:4px; font-weight:600; margin-bottom:4px; white-space:nowrap;}
+  .fat-etapas{display:flex; flex-direction:column; gap:4px; min-width:170px;}
+  .fat-et{display:flex; align-items:center; gap:4px;}
+  .fat-et input[type=number]{width:56px; padding:3px 4px; font-size:12px;}
+  .fat-x{border:none; background:transparent; color:#a13c3c; cursor:pointer; font-size:16px; line-height:1; padding:0 4px;}
+  .fat-add{font-size:11px; padding:3px 8px;}
 </style>
 </head>
 <body>
@@ -320,6 +331,7 @@ let state = {
   compFiltro: 'todos', // todos | andamento | finalizada | vinculados | sem_vinculo | estourou
   compSearch: '',
   fatMesFiltro: '',
+  fat: [], fatErro: null, fatFiltro: 'todos', fatBusca: '', fatMes: '',
   obraParaVincular: null,
   vinculoBusca: '',
   vinculosListaBusca: '',
@@ -504,14 +516,15 @@ async function fetchAll(table, mapper){
 }
 
 async function loadAll(){
-  const [p,o,f,m,pe] = await Promise.all([
+  const [p,o,f,m,pe,ft] = await Promise.all([
     fetchAll('produtos', rowToProduto),
     fetchAll('obras', rowToObra),
     fetchAll('fornecedores', rowToFornecedor),
     fetchAll('movimentacoes', rowToMov),
-    fetchAll('pedidos', rowToPed)
+    fetchAll('pedidos', rowToPed),
+    fetchFat()
   ]);
-  state.produtos = p; state.obras = o; state.fornecedores = f; state.movimentacoes = m; state.pedidos = pe;
+  state.produtos = p; state.obras = o; state.fornecedores = f; state.movimentacoes = m; state.pedidos = pe; state.fat = ft;
   state.precisaImportar = (p.length===0 && o.length===0);
   state.loaded = true;
   render();
@@ -855,6 +868,7 @@ function render(){
     ${state.toast ? `<div style="position:fixed;bottom:22px;right:22px;background:${state.toast.kind==='error'?'#a13c3c':'#1b1e22'};color:#fff;padding:12px 18px;border-radius:3px;font-size:13px;z-index:200;box-shadow:0 8px 20px rgba(0,0,0,.2);">${esc(state.toast.msg)}</div>` : ''}
   `;
   attachEvents();
+  attachFatEvents();
 }
 
 function renderLogin(){
@@ -909,7 +923,7 @@ function renderSidebar(){
   const reposicaoCount = itensReposicao().length;
   // temporariamente escondidas do menu pra todo mundo (em construção) — o código continua
   // funcionando por baixo, é só reaparecer aqui quando quiser reativar.
-  const ABAS_TEMP_OCULTAS = ['faturamento','necessidade','vinculos'];
+  const ABAS_TEMP_OCULTAS = ['necessidade','vinculos'].concat(souFabrica() ? ['faturamento'] : []);
   let items = [
     ['dashboard','Painel','◆'],
     ['estoque','Estoque','▤'],
@@ -957,7 +971,7 @@ function renderTopbar(){
     movimentacao:['Registrar movimentação','Entrada ou saída de material'],
     obras:['Obras — Centro de Custos','Custo de material por obra'],
     comparativo:['Comparativo Sistema × Real','Alumínio, vidro, acessório e peso: previsto × real'],
-    faturamento:['Faturamento','Valor de venda, % faturado e saldo a receber por obra'],
+    faturamento:['Faturamento','Material, produção e instalação faturados por obra + fechamento do mês'],
     necessidade:['Necessidade de Material','Quanto ainda falta gastar em Alumínio, Vidro e Acessório pra terminar as obras'],
     vinculos:['Vínculos Pendentes','Ligue as obras do estoque aos pedidos do financeiro'],
     historico:['Histórico de movimentações','Todas as entradas e saídas'],
@@ -984,13 +998,323 @@ function renderView(){
     case 'movimentacao': return renderMovimentacao();
     case 'obras': return state.obraSelecionada ? renderObraDetail() : renderObras();
     case 'comparativo': return state.pedidoSelecionado ? renderPedidoDetail() : renderComparativo();
-    case 'faturamento': return renderDashboard();
+    case 'faturamento': return souFabrica() ? renderDashboard() : renderFatObras();
     case 'necessidade': return renderDashboard();
     case 'vinculos': return renderDashboard();
     case 'historico': return renderHistorico();
     case 'fornecedores': return renderFornecedores();
     default: return '';
   }
+}
+
+/* ================= FATURAMENTO (aba nova, isolada das outras) =================
+   Só LÊ as obras/pedidos já cadastrados (valor de venda, custo sistema, peso líquido, m² de vidro).
+   Os dados daqui ficam na tabela própria faturamento_obras e não influenciam nenhuma outra aba. */
+const FAT_PCT_MAT = { alu: 25, vid: 15, ace: 10 };
+const FAT_PCT_CM = 5, FAT_PCT_RET = 5, FAT_PCT_ETAPAS_MAX = 20;
+
+function fatToRow(f){
+  return { obra_id: f.obraId,
+    mat_alu: !!f.matAlu, mat_alu_mes: f.matAluMes || null,
+    mat_vid: !!f.matVid, mat_vid_mes: f.matVidMes || null,
+    mat_ace: !!f.matAce, mat_ace_mes: f.matAceMes || null,
+    prod_cm_mes: f.prodCmMes || null, prod_etapas: f.prodEtapas || [],
+    inst_ret_mes: f.instRetMes || null, inst_etapas: f.instEtapas || [] };
+}
+function rowToFat(r){
+  return { obraId: r.obra_id,
+    matAlu: !!r.mat_alu, matAluMes: r.mat_alu_mes || '',
+    matVid: !!r.mat_vid, matVidMes: r.mat_vid_mes || '',
+    matAce: !!r.mat_ace, matAceMes: r.mat_ace_mes || '',
+    prodCmMes: r.prod_cm_mes || '', prodEtapas: r.prod_etapas || [],
+    instRetMes: r.inst_ret_mes || '', instEtapas: r.inst_etapas || [] };
+}
+async function fetchFat(){
+  try{
+    const { data, error } = await sbClient.from('faturamento_obras').select('*');
+    if(error){ console.warn('faturamento_obras:', error.message); state.fatErro = error.message; return []; }
+    state.fatErro = null;
+    return data.map(rowToFat);
+  }catch(e){ console.warn('faturamento_obras:', e); state.fatErro = String(e.message||e); return []; }
+}
+
+function fatVazio(obraId){
+  return { obraId, matAlu:false, matAluMes:'', matVid:false, matVidMes:'', matAce:false, matAceMes:'',
+    prodCmMes:'', prodEtapas:[], instRetMes:'', instEtapas:[] };
+}
+function fatDaObra(obraId){ return state.fat.find(f=>f.obraId===obraId) || fatVazio(obraId); }
+function fatSomaEtapas(arr){ return Math.round((arr||[]).reduce((s,e)=> s + (Number(e.pct)||0), 0)*100)/100; }
+
+// Cálculo de uma obra. ped = pedido vinculado (pode ser undefined).
+function fatCalc(f, ped){
+  const mat = (f.matAlu?FAT_PCT_MAT.alu:0) + (f.matVid?FAT_PCT_MAT.vid:0) + (f.matAce?FAT_PCT_MAT.ace:0);
+  const prod = (f.prodCmMes?FAT_PCT_CM:0) + fatSomaEtapas(f.prodEtapas);
+  const inst = (f.instRetMes?FAT_PCT_RET:0) + fatSomaEtapas(f.instEtapas);
+  const total = Math.round((mat+prod+inst)*100)/100;
+  let custoEst = null;
+  if(ped && (ped.casis!=null || ped.cvsis!=null || ped.caesis!=null)){
+    custoEst = (f.matAlu?0:(ped.casis||0)) + (f.matVid?0:(ped.cvsis||0)) + (f.matAce?0:(ped.caesis||0));
+  }
+  return { mat, prod, inst, total, custoEst, finalizado: total >= 100 - 1e-9 };
+}
+
+// Quanto da obra foi faturado num mês (mes = 'AAAA-MM'): % total e % de produção (CM + etapas de produção).
+function fatPctNoMes(f, mes){
+  let total = 0, prod = 0;
+  if(f.matAlu && f.matAluMes===mes) total += FAT_PCT_MAT.alu;
+  if(f.matVid && f.matVidMes===mes) total += FAT_PCT_MAT.vid;
+  if(f.matAce && f.matAceMes===mes) total += FAT_PCT_MAT.ace;
+  if(f.prodCmMes===mes){ total += FAT_PCT_CM; prod += FAT_PCT_CM; }
+  (f.prodEtapas||[]).forEach(e=>{ if(e.mes===mes){ total += Number(e.pct)||0; prod += Number(e.pct)||0; } });
+  if(f.instRetMes===mes) total += FAT_PCT_RET;
+  (f.instEtapas||[]).forEach(e=>{ if(e.mes===mes) total += Number(e.pct)||0; });
+  return { total, prod };
+}
+function fatResumoMes(mes){
+  const linhas = [];
+  let valor = 0, kg = 0, m2 = 0, semValor = 0, semPeso = 0, semVidro = 0;
+  state.obras.forEach(o=>{
+    const f = state.fat.find(x=>x.obraId===o.id);
+    if(!f) return;
+    const { total, prod } = fatPctNoMes(f, mes);
+    if(total<=0) return;
+    const ped = pedidoDaObra(o.id);
+    const vv = ped && ped.valorVenda!=null ? ped.valorVenda : null;
+    const v = vv!=null ? vv*total/100 : 0;
+    const m = (prod>0 && ped && ped.vidm2) ? ped.vidm2*prod/25 : 0;
+    if(vv==null) semValor++;
+    if(prod>0 && !(ped && ped.alkg)) semPeso++;
+    if(prod>0 && !(ped && ped.vidm2)) semVidro++;
+    valor += v; kg += (prod>0 && ped && ped.alkg) ? ped.alkg*prod/25 : 0; m2 += m;
+    linhas.push({ obra:o, total, prod, valor:v, kg:(prod>0 && ped && ped.alkg) ? ped.alkg*prod/25 : 0, m2:m });
+  });
+  return { linhas, valor, kg, m2, semValor, semPeso, semVidro };
+}
+
+function fatMesesOpcoes(){
+  const nomes = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  const out = [];
+  for(let y=2025;y<=2028;y++) for(let m=0;m<12;m++) out.push({ v:`${y}-${String(m+1).padStart(2,'0')}`, l:`${nomes[m]}/${String(y).slice(2)}` });
+  return out;
+}
+function fatMesLabel(v){
+  if(!v) return '';
+  const o = fatMesesOpcoes().find(x=>x.v===v);
+  return o ? o.l : v;
+}
+function fatSelMes(valor, attr, ed){
+  return `<select class="fat-mes" ${attr} ${ed?'':'disabled'}><option value="">mês…</option>${fatMesesOpcoes().map(o=>`<option value="${o.v}" ${o.v===valor?'selected':''}>${o.l}</option>`).join('')}</select>`;
+}
+function fatSelMesResumo(valor){
+  return `<select id="fat-resumo-mes">${fatMesesOpcoes().map(o=>`<option value="${o.v}" ${o.v===valor?'selected':''}>${o.l}</option>`).join('')}</select>`;
+}
+
+function fatValidar(f){
+  if(fatSomaEtapas(f.prodEtapas) > FAT_PCT_ETAPAS_MAX + 1e-9)
+    return `Produção: FAT. CM (5%) + etapas não pode passar de 25% — as etapas somam no máximo ${FAT_PCT_ETAPAS_MAX}%.`;
+  if(fatSomaEtapas(f.instEtapas) > FAT_PCT_ETAPAS_MAX + 1e-9)
+    return `Instalação: retenção (5%) + etapas não pode passar de 25% — as etapas somam no máximo ${FAT_PCT_ETAPAS_MAX}%.`;
+  return null;
+}
+async function fatSalvar(f){
+  state.saving = true; updateSaveIndicator();
+  const { error } = await sbClient.from('faturamento_obras').upsert([fatToRow(f)]);
+  if(error){ console.error(error); showToast('Erro ao salvar faturamento: '+error.message, 'error'); }
+  state.saving = false; updateSaveIndicator();
+}
+function fatEditar(obraId, mutator){
+  if(!souAdmin()) return;
+  const atual = state.fat.find(x=>x.obraId===obraId);
+  const copia = JSON.parse(JSON.stringify(atual || fatVazio(obraId)));
+  mutator(copia);
+  const erro = fatValidar(copia);
+  if(erro){ showToast(erro, 'error'); return; }
+  if(atual) Object.assign(atual, copia); else state.fat.push(copia);
+  render();
+  fatSalvar(copia);
+}
+
+function fatEtapasHtml(f, grupo, ed){
+  const arr = grupo==='prod' ? f.prodEtapas : f.instEtapas;
+  const usado = fatSomaEtapas(arr);
+  const dis = ed ? '' : 'disabled';
+  return `<div class="fat-etapas">` + arr.map((e,i)=>{
+    const k = `${f.obraId}:${grupo}:${i}`;
+    return `<div class="fat-et">
+      <input type="number" min="0" max="${FAT_PCT_ETAPAS_MAX}" step="0.5" value="${esc(e.pct)}" data-fat-et="${k}:pct" ${dis}><span>%</span>
+      ${fatSelMes(e.mes||'', `data-fat-et="${k}:mes"`, ed)}
+      ${ed ? `<button class="fat-x" title="Remover etapa" data-fat-delet="${k}">×</button>` : ''}
+    </div>`;
+  }).join('') + (ed && usado < FAT_PCT_ETAPAS_MAX - 1e-9
+      ? `<button class="secondary fat-add" data-fat-addet="${f.obraId}:${grupo}">+ etapa <span style="opacity:.6">(restam ${fmtNum(FAT_PCT_ETAPAS_MAX-usado)}%)</span></button>` : '')
+    + `</div>`;
+}
+
+function renderFatObras(){
+  const ed = souAdmin();
+  const mesAtual = state.fatMes || todayISO().slice(0,7);
+  const busca = state.fatBusca.trim().toLowerCase();
+
+  const linhasTodas = state.obras.map(o=>{
+    const f = fatDaObra(o.id);
+    const ped = pedidoDaObra(o.id);
+    return { o, f, ped, c: fatCalc(f, ped) };
+  });
+  let list = linhasTodas;
+  if(state.fatFiltro==='andamento') list = list.filter(r=>!r.c.finalizado);
+  if(state.fatFiltro==='finalizado') list = list.filter(r=>r.c.finalizado);
+  if(busca) list = list.filter(r=> (r.o.n||'').toLowerCase().includes(busca) || (r.o.pedido||'').toLowerCase().includes(busca));
+  list = [...list].sort((a,b)=> b.o.id - a.o.id);
+
+  const qtdFinal = linhasTodas.filter(r=>r.c.finalizado).length;
+  const custoTotal = linhasTodas.reduce((s,r)=> s + (r.c.custoEst||0), 0);
+  const resumo = fatResumoMes(mesAtual);
+  const semMes = linhasTodas.filter(r=>{
+    const f = r.f;
+    return (f.matAlu && !f.matAluMes) || (f.matVid && !f.matVidMes) || (f.matAce && !f.matAceMes)
+      || (f.prodEtapas||[]).some(e=>!e.mes) || (f.instEtapas||[]).some(e=>!e.mes);
+  }).length;
+
+  return `
+  ${state.fatErro ? `<div class="hint" style="background:#f3dede;color:#a13c3c;padding:10px 12px;border-radius:3px;margin-bottom:14px;">
+    A tabela de faturamento ainda não existe no banco (${esc(state.fatErro)}). Rode o arquivo <b>criar_tabela_faturamento.sql</b> no SQL Editor do Supabase e recarregue a página.</div>` : ''}
+  ${!ed ? `<div class="hint" style="margin-bottom:14px;">Somente o administrador edita o faturamento. Você está só visualizando.</div>` : ''}
+
+  <div class="toolbar" style="margin-bottom:10px;">
+    <div style="font-weight:600;font-size:14px;">Fechamento do mês</div>
+    ${fatSelMesResumo(mesAtual)}
+  </div>
+  <div class="grid-cards" style="margin-bottom:10px;">
+    <div class="card"><div class="k">Valor de venda faturado no mês</div><div class="v">${fmtMoney(resumo.valor)}</div><div class="foot">valor de venda × % faturado em ${esc(fatMesLabel(mesAtual))}</div></div>
+    <div class="card"><div class="k">Kg produzido no mês</div><div class="v">${fmtNum(resumo.kg)} kg</div><div class="foot">peso líquido × produção do mês ÷ 25%</div></div>
+    <div class="card"><div class="k">m² de vidro produzido no mês</div><div class="v">${fmtNum(resumo.m2)} m²</div><div class="foot">m² de vidro × produção do mês ÷ 25%</div></div>
+    <div class="card"><div class="k">Custo estimado p/ terminar (todas as obras)</div><div class="v amber">${fmtMoney(custoTotal)}</div><div class="foot">material ainda não faturado, pelo custo sistema</div></div>
+  </div>
+  ${(resumo.semValor||resumo.semPeso||resumo.semVidro) ? `<div class="hint" style="margin-bottom:10px;">Atenção neste mês:
+    ${resumo.semValor?`${resumo.semValor} obra(s) sem valor de venda (não somam em R$). `:''}
+    ${resumo.semPeso?`${resumo.semPeso} obra(s) com produção mas sem peso líquido no sistema (kg zerado). `:''}
+    ${resumo.semVidro?`${resumo.semVidro} obra(s) com produção mas sem m² de vidro no sistema.`:''}</div>` : ''}
+  ${resumo.linhas.length ? `
+  <details style="margin-bottom:16px;"><summary style="cursor:pointer;font-size:12.5px;color:var(--ink-soft);">Ver obras faturadas em ${esc(fatMesLabel(mesAtual))} (${resumo.linhas.length})</summary>
+    <div class="table-wrap" style="margin-top:8px;"><table>
+      <thead><tr><th>Obra</th><th class="num">% faturado no mês</th><th class="num">Valor faturado</th><th class="num">Kg produzido</th><th class="num">m² vidro</th></tr></thead>
+      <tbody>${resumo.linhas.map(l=>`<tr><td><b>${esc(l.obra.n)}</b> <span style="color:var(--ink-soft);font-size:11.5px;">${esc(l.obra.pedido||'')}</span></td>
+        <td class="num">${fmtNum(l.total)}%</td><td class="num">${fmtMoney(l.valor)}</td><td class="num">${l.kg?fmtNum(l.kg):'—'}</td><td class="num">${l.m2?fmtNum(l.m2):'—'}</td></tr>`).join('')}</tbody>
+    </table></div>
+  </details>` : `<div class="hint" style="margin-bottom:16px;">Nenhuma obra com faturamento marcado em ${esc(fatMesLabel(mesAtual))}.</div>`}
+
+  <div class="toolbar">
+    <input type="text" class="search-input" id="fat-search" placeholder="Buscar por obra ou nº do pedido…" value="${esc(state.fatBusca)}">
+    <div class="pill-toggle">
+      <button data-fatfilt="todos" class="${state.fatFiltro==='todos'?'active':''}">Todos</button>
+      <button data-fatfilt="andamento" class="${state.fatFiltro==='andamento'?'active':''}">Em andamento</button>
+      <button data-fatfilt="finalizado" class="${state.fatFiltro==='finalizado'?'active':''}">Faturamento finalizado (${qtdFinal})</button>
+    </div>
+    <div style="margin-left:auto;color:var(--ink-soft);font-size:12px;">${list.length} obra(s)${semMes?` · ${semMes} com faturamento sem mês`:''}</div>
+  </div>
+  <div class="hint" style="margin-bottom:10px;">Material: marque o X (alumínio 25%, vidro 15%, acessório 10%). Produção = FAT. CM 5% + etapas até 20%. Instalação = retenção 5% + etapas até 20%. FAT. CM e retenção só contam quando o mês é escolhido.</div>
+
+  <div class="table-wrap" style="overflow-x:auto;">
+  <table class="fat-table">
+    <thead>
+      <tr>
+        <th rowspan="2">Obra</th><th rowspan="2" class="num">Valor venda</th>
+        <th colspan="3" class="fat-mat" style="text-align:center;">MATERIAL</th>
+        <th colspan="2" class="fat-prod" style="text-align:center;">PRODUÇÃO (25%)</th>
+        <th colspan="2" class="fat-inst" style="text-align:center;">INSTALAÇÃO (25%)</th>
+        <th rowspan="2" class="num">Total faturado</th><th rowspan="2" class="num">Custo estimado mat.</th>
+      </tr>
+      <tr>
+        <th class="fat-mat">Alumínio 25%</th><th class="fat-mat">Vidro 15%</th><th class="fat-mat">Acessório 10%</th>
+        <th class="fat-prod">FAT. CM 5%</th><th class="fat-prod">Etapas</th>
+        <th class="fat-inst">Retenção 5%</th><th class="fat-inst">Etapas</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${list.length===0 ? `<tr><td colspan="11"><div class="empty">Nenhuma obra encontrada.</div></td></tr>` : list.map(r=>{
+        const { o, f, ped, c } = r;
+        const dis = ed ? '' : 'disabled';
+        const xCell = (campo, mesCampo, checked, mes)=> `<td class="fat-mat"><label class="fat-x-lab"><input type="checkbox" data-fat-chk="${o.id}:${campo}" ${checked?'checked':''} ${dis}> X</label>
+          ${checked ? fatSelMes(mes, `data-fat-mes="${o.id}:${mesCampo}"`, ed) : ''}</td>`;
+        return `<tr>
+          <td><b>${esc(o.n)}</b><div style="color:var(--ink-soft);font-size:11.5px;">${esc(o.pedido||'sem nº de pedido')}</div></td>
+          <td class="num">${ped && ped.valorVenda!=null ? fmtMoney(ped.valorVenda) : '—'}</td>
+          ${xCell('matAlu','matAluMes',f.matAlu,f.matAluMes)}
+          ${xCell('matVid','matVidMes',f.matVid,f.matVidMes)}
+          ${xCell('matAce','matAceMes',f.matAce,f.matAceMes)}
+          <td class="fat-prod">${fatSelMes(f.prodCmMes, `data-fat-mes="${o.id}:prodCmMes"`, ed)}</td>
+          <td class="fat-prod">${fatEtapasHtml(f,'prod',ed)}</td>
+          <td class="fat-inst">${fatSelMes(f.instRetMes, `data-fat-mes="${o.id}:instRetMes"`, ed)}</td>
+          <td class="fat-inst">${fatEtapasHtml(f,'inst',ed)}</td>
+          <td class="num"><b>${fmtNum(c.total)}%</b>${c.finalizado ? `<div><span class="badge ok">finalizado</span></div>` : ''}
+            <div style="color:var(--ink-soft);font-size:10.5px;">mat ${fmtNum(c.mat)} · prod ${fmtNum(c.prod)} · inst ${fmtNum(c.inst)}</div></td>
+          <td class="num">${c.custoEst==null ? `<span title="${ped?'pedido sem custo sistema':'obra sem pedido vinculado'}" style="color:var(--ink-soft);">—</span>` : fmtMoney(c.custoEst)}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+function attachFatEvents(){
+  const busca = document.getElementById('fat-search');
+  if(busca) busca.addEventListener('input', e=>{ state.fatBusca = e.target.value; render(); preserveFocus('fat-search'); });
+  $root.querySelectorAll('[data-fatfilt]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.fatFiltro = el.getAttribute('data-fatfilt'); render(); });
+  });
+  const rm = document.getElementById('fat-resumo-mes');
+  if(rm) rm.addEventListener('change', e=>{ state.fatMes = e.target.value; render(); });
+
+  $root.querySelectorAll('[data-fat-chk]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const [id, campo] = el.getAttribute('data-fat-chk').split(':');
+      const marcado = el.checked;
+      fatEditar(Number(id), f=>{
+        f[campo] = marcado;
+        if(!marcado) f[campo+'Mes'] = '';
+        else if(!f[campo+'Mes']) f[campo+'Mes'] = todayISO().slice(0,7);
+      });
+    });
+  });
+  $root.querySelectorAll('[data-fat-mes]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const [id, campo] = el.getAttribute('data-fat-mes').split(':');
+      const v = el.value;
+      fatEditar(Number(id), f=>{ f[campo] = v; });
+    });
+  });
+  $root.querySelectorAll('[data-fat-et]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const [id, grupo, idx, campo] = el.getAttribute('data-fat-et').split(':');
+      const v = el.value;
+      fatEditar(Number(id), f=>{
+        const arr = grupo==='prod' ? f.prodEtapas : f.instEtapas;
+        if(!arr[Number(idx)]) return;
+        if(campo==='pct'){ const n = parseFloat(String(v).replace(',','.')); arr[Number(idx)].pct = isNaN(n)||n<0 ? 0 : Math.round(n*100)/100; }
+        else arr[Number(idx)].mes = v;
+      });
+    });
+  });
+  $root.querySelectorAll('[data-fat-addet]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const [id, grupo] = el.getAttribute('data-fat-addet').split(':');
+      fatEditar(Number(id), f=>{
+        const arr = grupo==='prod' ? f.prodEtapas : f.instEtapas;
+        const resta = Math.round((FAT_PCT_ETAPAS_MAX - fatSomaEtapas(arr))*100)/100;
+        if(resta<=0) return;
+        arr.push({ pct: resta, mes: '' });
+      });
+    });
+  });
+  $root.querySelectorAll('[data-fat-delet]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const [id, grupo, idx] = el.getAttribute('data-fat-delet').split(':');
+      fatEditar(Number(id), f=>{
+        const arr = grupo==='prod' ? f.prodEtapas : f.instEtapas;
+        arr.splice(Number(idx), 1);
+      });
+    });
+  });
 }
 
 /* ---- DASHBOARD ---- */
