@@ -2381,7 +2381,7 @@ function renderObraModal(){
       <div class="form-row"><label>Nome da obra / cliente *</label><input type="text" id="of-nome" placeholder="ex: Obra João da Silva" required></div>
       <div class="form-row"><label>Número do pedido *</label><input type="text" id="of-pedido" placeholder="ex: 540-2025" required></div>
       <div class="form-row"><label>Valor de venda (R$)</label><input type="number" step="0.01" id="of-valorvenda" placeholder="0,00"></div>
-      <div class="hint" style="margin:-8px 0 14px 0;">Nome e número do pedido são obrigatórios — é o que mantém a obra vinculada ao comparativo Sistema × Real. O valor de venda pode ser preenchido depois, se ainda não tiver.</div>
+      <div class="hint" style="margin:-8px 0 14px 0;">Obra e pedido são a mesma coisa: nome e número do pedido são obrigatórios, e o mesmo número de pedido não pode ser cadastrado duas vezes. O valor de venda pode ser preenchido depois, se ainda não tiver.</div>
 
       <div class="section-head" style="margin-bottom:8px;"><h2 style="font-size:12.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.03em;">Peso e vidro — sistema (previsto)</h2></div>
       <div class="form-row-2">
@@ -3054,11 +3054,12 @@ async function excluirObrasSelecionadas(){
   for(const id of ids){
     const pedLigado = pedidoDaObra(id);
     if(pedLigado){
-      pedLigado.obraId = null;
-      await salvarUm('pedidos', pedLigado);
+      await excluirUm('pedidos', pedLigado.id);
+      state.pedidos = state.pedidos.filter(p=>p.id!==pedLigado.id);
     }
     await excluirUm('obras', id);
   }
+  state.fat = state.fat.filter(x=>!state.obrasSelecionadas.has(x.obraId));
   state.obras = state.obras.filter(o=>!state.obrasSelecionadas.has(o.id));
   state.obrasSelecionadas = new Set();
   state.modoSelecaoObras = false;
@@ -3112,10 +3113,11 @@ async function excluirObra(){
 
   const pedLigado = pedidoDaObra(o.id);
   if(pedLigado){
-    pedLigado.obraId = null;
-    await salvarUm('pedidos', pedLigado);
+    await excluirUm('pedidos', pedLigado.id);
+    state.pedidos = state.pedidos.filter(p=>p.id!==pedLigado.id);
   }
   state.obras = state.obras.filter(x=>x.id!==o.id);
+  state.fat = state.fat.filter(x=>x.obraId!==o.id);
   await excluirUm('obras', o.id);
   state.obraSelecionada = null;
   state.saving = false; updateSaveIndicator();
@@ -3123,11 +3125,12 @@ async function excluirObra(){
   render();
 }
 
-function salvarObra(){
+async function salvarObra(){
+  if(state.salvandoObra) return; // evita clique duplo
   const nome = document.getElementById('of-nome').value.trim();
   const pedido = document.getElementById('of-pedido').value.trim();
   if(!nome){ showToast('Informe o nome da obra.', 'error'); return; }
-  if(!pedido){ showToast('Informe o número do pedido — é obrigatório para manter o vínculo com o comparativo.', 'error'); return; }
+  if(!pedido){ showToast('Informe o número do pedido — obra e pedido são a mesma coisa aqui.', 'error'); return; }
 
   const pbkg = numOrNull('of-pbkg');
   const plkg = numOrNull('of-plkg');
@@ -3138,40 +3141,48 @@ function salvarObra(){
   const cmvsis = (casis||0) + (cvsis||0) + (caesis||0);
   const valorVenda = numOrNull('of-valorvenda');
 
-  const nova = { id: nextId(state.obras), n: nome, st: 'Ativa', pedido: pedido, listasCorte: [] };
-  state.obras.push(nova);
+  // já existe no que está carregado na tela? avisa antes de ir ao banco
+  const dup = state.obras.find(o => (o.pedido||'').trim().toUpperCase() === pedido.toUpperCase());
+  if(dup){ showToast(`Já existe uma obra com o pedido ${pedido} (${dup.n}).`, 'error'); return; }
 
-  // se já existir um pedido importado (sem obra vinculada) com esse número, usa ele —
-  // evita duplicar e perder os dados de custo sistema que já vieram da planilha.
-  const pedidoExistente = state.pedidos.find(p => !p.obraId && p.ped.toUpperCase().includes(pedido.toUpperCase()));
-  let pedidoTocado;
-  if(pedidoExistente){
-    pedidoExistente.obraId = nova.id;
-    pedidoExistente.autoVinculo = false;
-    if(pedidoExistente.valorVenda===undefined || pedidoExistente.valorVenda===null) pedidoExistente.valorVenda = valorVenda;
-    if(pedidoExistente.abkg===undefined || pedidoExistente.abkg===null) pedidoExistente.abkg = pbkg;
-    if(pedidoExistente.alkg===undefined || pedidoExistente.alkg===null) pedidoExistente.alkg = plkg;
-    if(pedidoExistente.vidm2===undefined || pedidoExistente.vidm2===null) pedidoExistente.vidm2 = vidm2;
-    pedidoTocado = pedidoExistente;
-  } else {
-    pedidoTocado = {
-      id: nextId(state.pedidos),
-      ped: `${nome} — Pedido ${pedido}`,
-      status: 'Em andamento',
-      casis, cvsis, caesis, cmvsis,
-      careal: null, cvreal: null, caereal: null, cmvreal: null,
-      abkg: pbkg, alkg: plkg, vidm2,
-      pbruto: null, pliq: null, sucata: null,
-      obraId: nova.id, autoVinculo: false,
-      valorVenda: valorVenda, etapasFaturamento: []
-    };
-    state.pedidos.push(pedidoTocado);
+  state.salvandoObra = true;
+  const btn = document.getElementById('of-save');
+  if(btn){ btn.disabled = true; btn.textContent = 'Salvando…'; }
+  state.saving = true; updateSaveIndicator();
+
+  // obra + pedido são criados juntos, numa transação só, no banco (não existe mais obra sem pedido)
+  const { data, error } = await sbClient.rpc('criar_obra_com_pedido', {
+    p_nome: nome, p_pedido: pedido, p_valor_venda: valorVenda,
+    p_peso_bruto: pbkg, p_peso_liquido: plkg, p_m2_vidro: vidm2,
+    p_custo_alu: casis, p_custo_vidro: cvsis, p_custo_ace: caesis
+  });
+
+  state.salvandoObra = false;
+  state.saving = false; updateSaveIndicator();
+
+  if(error){
+    console.error(error);
+    const semFuncao = error.code==='PGRST202' || /could not find the function/i.test(error.message||'');
+    showToast(semFuncao
+      ? 'Falta rodar o SQL ajustar_cadastro_obra_pedido.sql no Supabase.'
+      : 'Obra NÃO cadastrada: ' + error.message, 'error');
+    if(btn){ btn.disabled = false; btn.textContent = 'Cadastrar obra'; }
+    return; // a tela de cadastro continua aberta, com o que foi digitado
   }
 
-  persist(['obras','pedidos'], {obras:nova, pedidos:pedidoTocado});
+  const nova = { id: data.obra_id, n: nome, st: 'Ativa', pedido: pedido, listasCorte: [] };
+  state.obras.push(nova);
+  state.pedidos.push({
+    id: data.pedido_id, ped: `${nome} — Pedido ${pedido}`, status: 'Em andamento',
+    casis, cvsis, caesis, cmvsis,
+    careal: null, cvreal: null, caereal: null, cmvreal: null,
+    abkg: pbkg, alkg: plkg, vidm2,
+    pbruto: null, pliq: null, sucata: null, precoSucata: null,
+    obraId: nova.id, autoVinculo: false, valorVenda: valorVenda, etapasFaturamento: []
+  });
   state.modal = null;
   if(state.view==='movimentacao'){ state.movLote.obraId = nova.id; }
-  showToast(pedidoExistente ? 'Obra cadastrada e vinculada a um pedido já existente.' : 'Obra cadastrada e vinculada ao comparativo.');
+  showToast('Obra e pedido cadastrados.');
   render();
 }
 
