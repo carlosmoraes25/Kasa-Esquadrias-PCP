@@ -331,6 +331,7 @@ let state = {
   compFiltro: 'todos', // todos | andamento | finalizada | vinculados | sem_vinculo | estourou
   compSearch: '',
   fatMesFiltro: '',
+  obraVisao: 'lancamentos',
   fat: [], fatErro: null, fatFiltro: 'todos', fatBusca: '', fatMes: '',
   obraParaVincular: null,
   vinculoBusca: '',
@@ -1721,36 +1722,48 @@ function renderObraDetail(){
   ` : ''}
 
   <section>
-    <div class="section-head"><h2>Materiais aplicados</h2></div>
+    <div class="section-head" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <h2>Materiais aplicados</h2>
+      <div class="pill-toggle">
+        <button data-obravisao="lancamentos" class="${state.obraVisao!=='agrupado'?'active':''}">Lançamento a lançamento</button>
+        <button data-obravisao="agrupado" class="${state.obraVisao==='agrupado'?'active':''}">Agrupado por produto</button>
+      </div>
+    </div>
+    ${state.obraVisao==='agrupado' ? `
     <div class="table-wrap"><table>
       <thead><tr><th>Produto</th><th class="num">Qtd. total</th><th class="num">Custo</th></tr></thead>
       <tbody>
         ${itens.length===0 ? `<tr><td colspan="3"><div class="empty">Nenhuma saída registrada para esta obra ainda.</div></td></tr>` :
         itens.map(i=>`<tr><td>${esc(i.nome)}</td><td class="num">${fmtQtd(i.qtd, i.u)}</td><td class="num">${fmtMoney(i.valor)}</td></tr>`).join('')}
       </tbody>
+      ${itens.length ? `<tfoot><tr><td><b>Total</b></td><td></td><td class="num"><b>${fmtMoney(custo)}</b></td></tr></tfoot>` : ''}
     </table></div>
-  </section>
-
-  <section>
-    <div class="section-head"><h2>Movimentações desta obra</h2></div>
+    <div class="hint" style="margin-top:6px;">Para corrigir um lançamento, volte para "Lançamento a lançamento".</div>
+    ` : `
     <div class="table-wrap"><table>
-      <thead><tr><th>Data</th><th>Produto</th><th>Vertente</th><th class="num">Qtd.</th><th class="num">Preço no lançamento</th><th>Responsável</th><th></th></tr></thead>
+      <thead><tr><th>Data</th><th>Produto</th><th>Vertente</th><th>Lista de corte</th><th class="num">Qtd.</th><th class="num">Preço</th><th class="num">Custo</th><th>Responsável</th><th></th></tr></thead>
       <tbody>
-        ${movs.length===0 ? `<tr><td colspan="7"><div class="empty">—</div></td></tr>` : movs.map(m=>`
+        ${movs.length===0 ? `<tr><td colspan="9"><div class="empty">Nenhuma saída registrada para esta obra ainda.</div></td></tr>` : movs.map(m=>{
+          const sinal = m.tipo==='Devolução' ? -1 : 1;
+          return `
         <tr ${m.cancelado?'style="opacity:.45;text-decoration:line-through;"':''}>
           <td>${fmtDate(m.data)}</td>
-          <td>${esc(produtoById(m.produtoId)?.n||'—')} ${m.tipo==='Devolução'?'<span class="badge neutral" style="margin-left:6px;">Devolução</span>':''}</td>
+          <td>${esc(produtoById(m.produtoId)?.n||'—')} ${m.tipo==='Devolução'?'<span class="badge neutral" style="margin-left:6px;">Devolução</span>':''}${m.naoAfetaEstoque?' <span class="badge neutral" style="font-size:9.5px;" title="Não descontou do saldo do estoque">histórico</span>':''}</td>
           <td><span class="badge neutral">${esc(vertenteLabel(m.vertente))}</span></td>
+          <td>${esc(m.listaCorte||'—')}</td>
           <td class="num">${fmtQtd(m.qtd, produtoById(m.produtoId)?.u)}</td>
           <td class="num">${fmtMoney(precoNaMovimentacao(m))}</td>
+          <td class="num">${fmtMoney(sinal*m.qtd*precoNaMovimentacao(m))}</td>
           <td>${esc(m.responsavel||'—')}</td>
           <td style="white-space:nowrap;">${m.cancelado ? '<span class="badge neutral">Cancelada</span>' : (
             (podeEditarMov() ? `<button class="secondary small" data-edit-mov="${m.id}">Editar</button> ` : '')
             + (souAdmin() ? `<button class="secondary small" data-cancel-mov="${m.id}">Cancelar</button>` : '')
             + ((!podeEditarMov() && !souAdmin()) ? '<span class="badge neutral">—</span>' : ''))}</td>
-        </tr>`).join('')}
+        </tr>`; }).join('')}
       </tbody>
+      ${movs.length ? `<tfoot><tr><td colspan="6"><b>Total</b></td><td class="num"><b>${fmtMoney(custo)}</b></td><td colspan="2"></td></tr></tfoot>` : ''}
     </table></div>
+    `}
   </section>
   `;
 }
@@ -2396,6 +2409,9 @@ function salvarEdicaoMov(){
   render();
 }
 function attachMovEditEvents(){
+  $root.querySelectorAll('[data-obravisao]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.obraVisao = el.getAttribute('data-obravisao'); render(); });
+  });
   $root.querySelectorAll('[data-edit-mov]').forEach(el=>{
     el.addEventListener('click', ()=>{
       const mov = state.movimentacoes.find(x=>x.id===Number(el.getAttribute('data-edit-mov')));
