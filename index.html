@@ -493,6 +493,7 @@ function rowToPed(r){
 function souAdmin(){ return state.perfil && state.perfil.role === 'admin'; }
 function souFabrica(){ return state.perfil && state.perfil.role === 'fabrica'; }
 function souCompras(){ return state.perfil && state.perfil.role === 'compras'; }
+function podeEditarMov(){ return souAdmin() || souCompras(); }
 function podeCadastrarObra(){ return souAdmin() || souFabrica(); }
 
 function rotuloPerfil(){
@@ -871,6 +872,7 @@ function render(){
   `;
   attachEvents();
   attachFatEvents();
+  attachMovEditEvents();
 }
 
 function renderLogin(){
@@ -1742,7 +1744,10 @@ function renderObraDetail(){
           <td class="num">${fmtQtd(m.qtd, produtoById(m.produtoId)?.u)}</td>
           <td class="num">${fmtMoney(precoNaMovimentacao(m))}</td>
           <td>${esc(m.responsavel||'—')}</td>
-          <td>${m.cancelado ? '<span class="badge neutral">Cancelada</span>' : (souAdmin() ? `<button class="secondary small" data-cancel-mov="${m.id}">Cancelar</button>` : '<span class="badge neutral">—</span>')}</td>
+          <td style="white-space:nowrap;">${m.cancelado ? '<span class="badge neutral">Cancelada</span>' : (
+            (podeEditarMov() ? `<button class="secondary small" data-edit-mov="${m.id}">Editar</button> ` : '')
+            + (souAdmin() ? `<button class="secondary small" data-cancel-mov="${m.id}">Cancelar</button>` : '')
+            + ((!podeEditarMov() && !souAdmin()) ? '<span class="badge neutral">—</span>' : ''))}</td>
         </tr>`).join('')}
       </tbody>
     </table></div>
@@ -2327,11 +2332,88 @@ function renderFornecedores(){
 }
 
 /* ---- MODAL ---- */
+
+/* ---- EDITAR MOVIMENTAÇÃO (admin e compras) ---- */
+function renderMovModal(m){
+  const prod = produtoById(m.produtoId);
+  const obras = [...state.obras].sort((a,b)=> (a.n||'').localeCompare(b.n||''));
+  return `
+  <div class="modal-bg" data-close-modal="1">
+    <div class="modal" data-stop="1">
+      <h3>Editar lançamento</h3>
+      <div class="hint" style="margin:0 0 12px 0;"><b>${esc(prod?prod.n:'(produto removido)')}</b> · ${esc(m.tipo)} em ${esc(fmtDate(m.data))}</div>
+      <div class="form-row"><label>Obra</label>
+        <select id="mv-obra">${obras.map(o=>`<option value="${o.id}" ${o.id===m.obraId?'selected':''}>${esc(o.n)}${o.pedido?' — '+esc(o.pedido):''}</option>`).join('')}</select>
+      </div>
+      <div class="form-row-2">
+        <div class="form-row"><label>Quantidade (${esc(unidadeLabel(prod?prod.u:'un'))})</label><input type="number" step="0.001" min="0" id="mv-qtd" value="${m.qtd}"></div>
+        <div class="form-row"><label>Preço unitário (R$)</label><input type="number" step="0.01" min="0" id="mv-preco" value="${precoNaMovimentacao(m)}"></div>
+      </div>
+      <div class="form-row-2">
+        <div class="form-row"><label>Vertente</label>
+          <select id="mv-vertente">${Object.entries(VERTENTES).map(([c,v])=>`<option value="${c}" ${(m.vertente||'acessorio')===c?'selected':''}>${v.label}</option>`).join('')}</select>
+        </div>
+        <div class="form-row"><label>Lista de corte</label><input type="text" id="mv-lista" value="${esc(m.listaCorte||'')}" placeholder="opcional"></div>
+      </div>
+      <div class="hint">${m.naoAfetaEstoque
+        ? 'Este lançamento não descontou do estoque, então mudar a quantidade não altera o saldo.'
+        : 'Se mudar a quantidade, o saldo do estoque é ajustado automaticamente pela diferença.'}</div>
+      <div class="form-actions">
+        <button id="mv-save">Salvar alterações</button>
+        <button class="secondary" data-close-modal="1">Cancelar</button>
+      </div>
+    </div>
+  </div>`;
+}
+function salvarEdicaoMov(){
+  if(!podeEditarMov()) return;
+  const mov = state.modal && state.modal.editing;
+  if(!mov || mov.cancelado) return;
+  const qtd = parseFloat(String(document.getElementById('mv-qtd').value).replace(',','.'));
+  const precoRaw = String(document.getElementById('mv-preco').value).trim().replace(',','.');
+  const preco = precoRaw==='' ? null : parseFloat(precoRaw);
+  const obraId = Number(document.getElementById('mv-obra').value);
+  const vertente = document.getElementById('mv-vertente').value;
+  const lista = document.getElementById('mv-lista').value.trim();
+  if(isNaN(qtd) || qtd<=0){ showToast('Informe uma quantidade maior que zero.', 'error'); return; }
+  if(preco!==null && (isNaN(preco) || preco<0)){ showToast('Preço inválido.', 'error'); return; }
+  if(!obraById(obraId)){ showToast('Selecione a obra.', 'error'); return; }
+
+  const produto = produtoById(mov.produtoId);
+  const diff = round3(qtd - mov.qtd);
+  if(produto && diff!==0 && !mov.naoAfetaEstoque){
+    // Saída: mais quantidade = sai mais do estoque. Devolução: mais quantidade = volta mais.
+    const delta = mov.tipo==='Devolução' ? diff : -diff;
+    produto.q = round3(produto.q + delta);
+  }
+  mov.qtd = qtd; mov.preco = preco; mov.obraId = obraId; mov.vertente = vertente; mov.listaCorte = lista || null;
+  const marca = `Editado por ${state.perfil?.email||'?'} em ${todayISO()}`;
+  mov.motivo = mov.motivo ? (mov.motivo + ' | ' + marca) : marca;
+  marcarMovDirty(mov);
+  persist(['produtos','movimentacoes'], {produtos: produto});
+  state.modal = null;
+  showToast('Lançamento atualizado.');
+  render();
+}
+function attachMovEditEvents(){
+  $root.querySelectorAll('[data-edit-mov]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const mov = state.movimentacoes.find(x=>x.id===Number(el.getAttribute('data-edit-mov')));
+      if(!mov) return;
+      state.modal = {type:'mov', editing: mov};
+      render();
+    });
+  });
+  const save = document.getElementById('mv-save');
+  if(save) save.addEventListener('click', salvarEdicaoMov);
+}
+
 function renderModal(){
   const m = state.modal;
   if(m.type==='produto') return renderProdutoModal(m.editing, m.prefillNome);
   if(m.type==='obra') return renderObraModal();
   if(m.type==='fornecedor') return renderFornecedorModal(m.editing);
+  if(m.type==='mov') return renderMovModal(m.editing);
   return '';
 }
 
@@ -3001,7 +3083,8 @@ function cancelarMovimentacao(id){
   if(!mov || mov.cancelado) return;
   if(!confirm('Cancelar esta movimentação? O saldo do produto será revertido.')) return;
   const produto = produtoById(mov.produtoId);
-  if(produto){
+  // lançamento "histórico" (não descontou do estoque) não devolve saldo ao cancelar
+  if(produto && !mov.naoAfetaEstoque){
     const delta = (mov.tipo==='Entrada'||mov.tipo==='Devolução') ? -mov.qtd : mov.qtd;
     produto.q = round3(produto.q + delta);
   }
