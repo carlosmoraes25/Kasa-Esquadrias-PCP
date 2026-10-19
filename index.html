@@ -492,12 +492,14 @@ function rowToPed(r){
 
 function souAdmin(){ return state.perfil && state.perfil.role === 'admin'; }
 function souFabrica(){ return state.perfil && state.perfil.role === 'fabrica'; }
+function souCompras(){ return state.perfil && state.perfil.role === 'compras'; }
 function podeCadastrarObra(){ return souAdmin() || souFabrica(); }
 
 function rotuloPerfil(){
   const r = state.perfil && state.perfil.role;
   if(r==='admin') return 'Admin';
   if(r==='fabrica') return 'Fábrica';
+  if(r==='compras') return 'Compras';
   return 'Operador';
 }
 
@@ -923,7 +925,7 @@ function renderSidebar(){
   const reposicaoCount = itensReposicao().length;
   // temporariamente escondidas do menu pra todo mundo (em construção) — o código continua
   // funcionando por baixo, é só reaparecer aqui quando quiser reativar.
-  const ABAS_TEMP_OCULTAS = ['necessidade','vinculos'].concat(souFabrica() ? ['faturamento'] : []);
+  const ABAS_TEMP_OCULTAS = ['necessidade','vinculos'].concat((souFabrica()||souCompras()) ? ['faturamento'] : []);
   let items = [
     ['dashboard','Painel','◆'],
     ['estoque','Estoque','▤'],
@@ -998,7 +1000,7 @@ function renderView(){
     case 'movimentacao': return renderMovimentacao();
     case 'obras': return state.obraSelecionada ? renderObraDetail() : renderObras();
     case 'comparativo': return state.pedidoSelecionado ? renderPedidoDetail() : renderComparativo();
-    case 'faturamento': return souFabrica() ? renderDashboard() : renderFatObras();
+    case 'faturamento': return (souFabrica()||souCompras()) ? renderDashboard() : renderFatObras();
     case 'necessidade': return renderDashboard();
     case 'vinculos': return renderDashboard();
     case 'historico': return renderHistorico();
@@ -1435,7 +1437,9 @@ function renderEstoque(){
           <td>${esc(p.c)}${p.s?` <span style="color:var(--ink-soft);">· ${esc(p.s)}</span>`:''}</td>
           <td>${esc(unidadeLabel(p.u))}</td>
           <td>${esc(p.f)||'—'}</td>
-          <td class="num">${p.p!=null ? fmtMoney(p.p) : '—'}</td>
+          <td class="num">${souCompras()
+            ? `<input type="number" step="0.01" min="0" class="preco-inline" data-preco-inline="${p.id}" value="${p.p??''}" placeholder="0,00" style="width:92px;text-align:right;">`
+            : (p.p!=null ? fmtMoney(p.p) : '—')}</td>
           <td class="num">${fmtNum(p.q)}</td>
           <td class="num">${fmtNum(p.m)}</td>
           <td>${isReposicao(p) ? '<span class="badge warn">Reposição</span>' : '<span class="badge ok">Ok</span>'}</td>
@@ -2731,6 +2735,21 @@ function attachEvents(){
   }
   $root.querySelectorAll('[data-estfilt]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.estoqueFiltro = el.getAttribute('data-estfilt'); render(); });
+  });
+  // Compras: atualizar preço direto na tabela do estoque (sem reabrir a tela, para dar para ir descendo a lista)
+  $root.querySelectorAll('[data-preco-inline]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      if(!souCompras() && !souAdmin()) return;
+      const prod = produtoById(Number(el.getAttribute('data-preco-inline')));
+      if(!prod) return;
+      const raw = String(el.value).trim().replace(',','.');
+      const novo = raw==='' ? null : parseFloat(raw);
+      if(novo!==null && (isNaN(novo) || novo<0)){ el.value = prod.p ?? ''; return; }
+      if(novo === prod.p) return;
+      prod.p = novo;
+      persist(['produtos'], {produtos:prod});
+      el.style.borderColor = '#3f7d52'; el.style.background = '#eaf4ec';
+    });
   });
   $root.querySelectorAll('[data-edit-produto]').forEach(el=>{
     el.addEventListener('click', ()=>{
