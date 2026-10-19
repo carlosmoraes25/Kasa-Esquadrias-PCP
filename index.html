@@ -1629,7 +1629,7 @@ function renderObras(){
         <div style="flex:1;">
           <div class="nm">${esc(r.obra.n)}${r.obra.pedido ? ` <span style="font-weight:400;color:var(--ink-soft);font-size:11.5px;">· Pedido ${esc(r.obra.pedido)}</span>` : ''}</div>
           <div class="cost">${fmtMoney(r.custo)}</div>
-          <div class="items">${r.n} saída(s) de material${state.modoSelecaoObras && !podeExcluir ? ' <span style="color:var(--amber);">— tem movimentação, não pode excluir</span>' : ''}</div>
+          <div class="items">${r.n} saída(s) de material${!pedidoDaObra(r.obra.id) ? ' <span class="badge warn" title="Esta obra não tem pedido no Comparativo — falta criar o pedido">sem pedido</span>' : ''}${state.modoSelecaoObras && !podeExcluir ? ' <span style="color:var(--amber);">— tem movimentação, não pode excluir</span>' : ''}</div>
         </div>
       </div>
     `;}).join('')}
@@ -1670,7 +1670,7 @@ function renderObraDetail(){
 
   return `
   <div class="breadcrumb" data-nav="obras">← todas as obras</div>
-  ${souAdmin() ? `<div style="margin-bottom:12px;"><button class="danger small" id="excluir-obra-btn">Excluir esta obra</button> <span class="hint">${movs.length===0 ? '— sem movimentações, pode excluir com segurança.' : `— tem ${movs.length} movimentação(ões); ao excluir, elas ficam sem obra vinculada (não são apagadas).`}</span></div>` : ''}
+  ${souAdmin() ? `<div style="margin-bottom:12px;"><button class="secondary small" id="editar-obra-btn">Editar obra</button> <button class="danger small" id="excluir-obra-btn">Excluir esta obra</button> <span class="hint">${movs.length===0 ? '— sem movimentações, pode excluir com segurança.' : `— tem ${movs.length} movimentação(ões); ao excluir, elas ficam sem obra vinculada (não são apagadas).`}</span></div>` : ''}
   <div class="grid-cards" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px;">
     <div class="card"><div class="k">Obra</div><div class="v" style="font-size:18px;">${esc(o.n)}</div></div>
     <div class="card"><div class="k">Número do pedido</div><div class="v" style="font-size:18px;">${o.pedido ? esc(o.pedido) : '<span style="color:var(--ink-soft);font-size:13px;">não informado</span>'}</div></div>
@@ -2346,6 +2346,105 @@ function renderFornecedores(){
 
 /* ---- MODAL ---- */
 
+/* ---- EDITAR OBRA (obra + pedido juntos) ---- */
+function renderObraEditModal(o){
+  const p = pedidoDaObra(o.id) || {};
+  const v = x => (x===null||x===undefined) ? '' : x;
+  return `
+  <div class="modal-bg" data-close-modal="1">
+    <div class="modal" data-stop="1">
+      <h3>Editar obra</h3>
+      ${!pedidoDaObra(o.id) ? `<div class="hint" style="background:#fbf1de;padding:8px 10px;border-radius:3px;margin-bottom:12px;">Esta obra ainda não tem pedido no Comparativo. Ao salvar, o pedido é criado com estes dados.</div>` : ''}
+      <div class="form-row"><label>Nome da obra / cliente *</label><input type="text" id="oe-nome" value="${esc(o.n)}"></div>
+      <div class="form-row-2">
+        <div class="form-row"><label>Número do pedido *</label><input type="text" id="oe-pedido" value="${esc(o.pedido||'')}"></div>
+        <div class="form-row"><label>Valor de venda (R$)</label><input type="number" step="0.01" id="oe-valorvenda" value="${v(p.valorVenda)}"></div>
+      </div>
+      <div class="section-head" style="margin:6px 0 8px 0;"><h2 style="font-size:12.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.03em;">Peso e vidro — sistema (previsto)</h2></div>
+      <div class="form-row-2">
+        <div class="form-row"><label>Peso bruto sistema (kg)</label><input type="number" step="0.01" id="oe-pbkg" value="${v(p.abkg)}"></div>
+        <div class="form-row"><label>Peso líquido sistema (kg)</label><input type="number" step="0.01" id="oe-plkg" value="${v(p.alkg)}"></div>
+      </div>
+      <div class="form-row"><label>Área de vidro (m²)</label><input type="number" step="0.01" id="oe-vidm2" value="${v(p.vidm2)}"></div>
+      <div class="section-head" style="margin:14px 0 8px 0;"><h2 style="font-size:12.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.03em;">Custo sistema (previsto)</h2></div>
+      <div class="form-row-2">
+        <div class="form-row"><label>Custo alumínio — sistema</label><input type="number" step="0.01" id="oe-casis" value="${v(p.casis)}"></div>
+        <div class="form-row"><label>Custo vidro — sistema</label><input type="number" step="0.01" id="oe-cvsis" value="${v(p.cvsis)}"></div>
+      </div>
+      <div class="form-row"><label>Custo acessório — sistema</label><input type="number" step="0.01" id="oe-caesis" value="${v(p.caesis)}"></div>
+      <div class="hint">O custo total do pedido (CMV sistema) é calculado somando alumínio + vidro + acessório. Mudar nome ou pedido não afeta as movimentações já lançadas.</div>
+      <div class="form-actions">
+        <button id="oe-save">Salvar alterações</button>
+        <button class="secondary" data-close-modal="1">Cancelar</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function salvarEdicaoObra(){
+  if(!souAdmin() || state.salvandoObra) return;
+  const o = state.modal && state.modal.editing;
+  if(!o) return;
+  const nome = document.getElementById('oe-nome').value.trim();
+  const pedido = document.getElementById('oe-pedido').value.trim();
+  if(!nome){ showToast('Informe o nome da obra.', 'error'); return; }
+  if(!pedido){ showToast('Informe o número do pedido.', 'error'); return; }
+  const dup = state.obras.find(x => x.id!==o.id && (x.pedido||'').trim().toUpperCase() === pedido.toUpperCase());
+  if(dup){ showToast(`Já existe outra obra com o pedido ${pedido} (${dup.n}).`, 'error'); return; }
+
+  const num = id => numOrNull(id);
+  const casis = num('oe-casis'), cvsis = num('oe-cvsis'), caesis = num('oe-caesis');
+  const dados = {
+    valorVenda: num('oe-valorvenda'), abkg: num('oe-pbkg'), alkg: num('oe-plkg'), vidm2: num('oe-vidm2'),
+    casis, cvsis, caesis, cmvsis: (casis||0)+(cvsis||0)+(caesis||0)
+  };
+  for(const k of ['valorVenda','abkg','alkg','vidm2','casis','cvsis','caesis']){
+    if(dados[k]!==null && (isNaN(dados[k]) || dados[k]<0)){ showToast('Há um número inválido no formulário.', 'error'); return; }
+  }
+
+  state.salvandoObra = true;
+  const btn = document.getElementById('oe-save');
+  if(btn){ btn.disabled = true; btn.textContent = 'Salvando…'; }
+  state.saving = true; updateSaveIndicator();
+
+  const novaObra = { ...o, n: nome, pedido };
+  let ped = pedidoDaObra(o.id);
+  let novoPed;
+  let erro = null;
+  try{
+    if(ped){
+      novoPed = { ...ped, ...dados, ped: `${nome} — Pedido ${pedido}` };
+    } else {
+      // pedido ainda não existe: pega o próximo número direto do banco para não repetir
+      const { data: ult, error: eMax } = await sbClient.from('pedidos').select('id').order('id', {ascending:false}).limit(1);
+      if(eMax) throw eMax;
+      const id = ((ult && ult[0] && ult[0].id) || 0) + 1;
+      novoPed = { id, ped: `${nome} — Pedido ${pedido}`, status: 'Em andamento',
+        careal: null, cvreal: null, caereal: null, cmvreal: null, pbruto: null, pliq: null, sucata: null, precoSucata: null,
+        obraId: o.id, autoVinculo: false, etapasFaturamento: [], ...dados };
+    }
+    // obra primeiro, pedido depois (o pedido depende da obra)
+    const r1 = await sbClient.from('obras').upsert([obraToRow(novaObra)]);
+    if(r1.error) throw r1.error;
+    const r2 = await sbClient.from('pedidos').upsert([pedToRow(novoPed)]);
+    if(r2.error) throw r2.error;
+  }catch(e){ erro = e; }
+
+  state.salvandoObra = false;
+  state.saving = false; updateSaveIndicator();
+  if(erro){
+    console.error(erro);
+    showToast('NÃO foi salvo: ' + (erro.message||erro), 'error');
+    if(btn){ btn.disabled = false; btn.textContent = 'Salvar alterações'; }
+    return;
+  }
+  Object.assign(o, novaObra);
+  if(ped) Object.assign(ped, novoPed); else state.pedidos.push(novoPed);
+  state.modal = null;
+  showToast('Obra atualizada.');
+  render();
+}
+
+
 /* ---- EDITAR MOVIMENTAÇÃO (admin e compras) ---- */
 function renderMovModal(m){
   const prod = produtoById(m.produtoId);
@@ -2409,6 +2508,15 @@ function salvarEdicaoMov(){
   render();
 }
 function attachMovEditEvents(){
+  const eo = document.getElementById('editar-obra-btn');
+  if(eo) eo.addEventListener('click', ()=>{
+    const o = obraById(state.obraSelecionada);
+    if(!o) return;
+    state.modal = {type:'obraEdit', editing:o};
+    render();
+  });
+  const oeSave = document.getElementById('oe-save');
+  if(oeSave) oeSave.addEventListener('click', salvarEdicaoObra);
   $root.querySelectorAll('[data-obravisao]').forEach(el=>{
     el.addEventListener('click', ()=>{ state.obraVisao = el.getAttribute('data-obravisao'); render(); });
   });
@@ -2430,6 +2538,7 @@ function renderModal(){
   if(m.type==='obra') return renderObraModal();
   if(m.type==='fornecedor') return renderFornecedorModal(m.editing);
   if(m.type==='mov') return renderMovModal(m.editing);
+  if(m.type==='obraEdit') return renderObraEditModal(m.editing);
   return '';
 }
 
