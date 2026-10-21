@@ -355,6 +355,7 @@ let state = {
     responsavel: '',
     data: todayISO(),
     naoAfetaEstoque: false,
+    centro: '', equipe: '',
     itens: [] // {id, produtoId, nome, unidade, qtd, vertente}
   },
   movLoteBusca: '',
@@ -364,6 +365,9 @@ let state = {
   movLoteItemPreco: '',
   movLoteListaCorte: '',
   movLoteVertente: 'acessorio',
+  equipes: [],
+  centroAba: 'INSTALACAO',
+  centroMes: todayISO().slice(0,7),
   movLoteKgBruto: '',
   movLoteKgLiq: '',
   movLotePrecoSucata: (function(){ try{ return localStorage.getItem('kasa_preco_sucata') || ''; }catch(e){ return ''; } })(),
@@ -472,14 +476,18 @@ function movToRow(m){
     fornecedor_id: m.fornecedorId || null, responsavel: m.responsavel || null, motivo: m.motivo || null,
     data: m.data, preco: m.preco ?? null, vertente: m.vertente || null, cancelado: !!m.cancelado, historico: !!m.historico,
     nao_afeta_estoque: !!m.naoAfetaEstoque, lista_corte: m.listaCorte || null,
-    kg_bruto: m.kgBruto ?? null, kg_liquido: m.kgLiquido ?? null, preco_sucata: m.precoSucata ?? null };
+    kg_bruto: m.kgBruto ?? null, kg_liquido: m.kgLiquido ?? null, preco_sucata: m.precoSucata ?? null,
+    centro_custo: m.centroCusto || null, equipe: m.equipe || null };
 }
 function rowToMov(r){
   return { id: r.id, tipo: r.tipo, produtoId: r.produto_id, qtd: r.quantidade, obraId: r.obra_id,
     fornecedorId: r.fornecedor_id, responsavel: r.responsavel, motivo: r.motivo, data: r.data,
     preco: r.preco, vertente: r.vertente, cancelado: r.cancelado, historico: r.historico,
     naoAfetaEstoque: r.nao_afeta_estoque, listaCorte: r.lista_corte,
-    kgBruto: r.kg_bruto, kgLiquido: r.kg_liquido, precoSucata: r.preco_sucata };
+    kgBruto: r.kg_bruto, kgLiquido: r.kg_liquido, precoSucata: r.preco_sucata,
+    centroCusto: r.centro_custo, equipe: r.equipe };
+}
+function rowToEquipe(r){ return { id: r.id, nome: r.nome, centro: r.centro, ativa: r.ativa !== false };
 }
 function pedToRow(p){
   return { id: p.id, ped: p.ped, status: p.status, casis: p.casis, cvsis: p.cvsis, caesis: p.caesis, cmvsis: p.cmvsis,
@@ -525,15 +533,16 @@ async function fetchAll(table, mapper){
 }
 
 async function loadAll(){
-  const [p,o,f,m,pe,ft] = await Promise.all([
+  const [p,o,f,m,pe,ft,eq] = await Promise.all([
     fetchAll('produtos', rowToProduto),
     fetchAll('obras', rowToObra),
     fetchAll('fornecedores', rowToFornecedor),
     fetchAll('movimentacoes', rowToMov),
     fetchAll('pedidos', rowToPed),
-    fetchFat()
+    fetchFat(),
+    fetchAll('equipes', rowToEquipe)
   ]);
-  state.produtos = p; state.obras = o; state.fornecedores = f; state.movimentacoes = m; state.pedidos = pe; state.fat = ft;
+  state.produtos = p; state.obras = o; state.fornecedores = f; state.movimentacoes = m; state.pedidos = pe; state.fat = ft; state.equipes = eq;
   state.precisaImportar = (p.length===0 && o.length===0);
   state.loaded = true;
   render();
@@ -946,7 +955,10 @@ function renderSidebar(){
     ['historico','Histórico','☰'],
     ['fornecedores','Fornecedores','⊞'],
   ];
-  items = items.filter(([id])=> !ABAS_TEMP_OCULTAS.includes(id));
+  items.splice(4, 0, ['centros','Produção & Instalação','⚒']);
+  if(souAdmin()) items.push(['config','Configurações','⚙']);
+  const OCULTAS_FAB = souFabrica() ? ['centros'] : [];
+  items = items.filter(([id])=> !ABAS_TEMP_OCULTAS.includes(id) && !OCULTAS_FAB.includes(id));
   return `
   <div class="sidebar">
     <div class="brand">
@@ -985,7 +997,9 @@ function renderTopbar(){
     necessidade:['Necessidade de Material','Quanto ainda falta gastar em Alumínio, Vidro e Acessório pra terminar as obras'],
     vinculos:['Vínculos Pendentes','Ligue as obras do estoque aos pedidos do financeiro'],
     historico:['Histórico de movimentações','Todas as entradas e saídas'],
-    fornecedores:['Fornecedores','Cadastro de fornecedores']
+    fornecedores:['Fornecedores','Cadastro de fornecedores'],
+    centros:['Produção & Instalação','Consumo de material por centro de custo e por equipe, mês a mês'],
+    config:['Configurações','Equipes de instalação']
   };
   const [t,s] = titles[state.view] || ['',''];
   return `
@@ -1013,6 +1027,8 @@ function renderView(){
     case 'vinculos': return renderDashboard();
     case 'historico': return renderHistorico();
     case 'fornecedores': return renderFornecedores();
+    case 'centros': return souFabrica() ? renderDashboard() : renderCentros();
+    case 'config': return souAdmin() ? renderConfig() : renderDashboard();
     default: return '';
   }
 }
@@ -1397,7 +1413,7 @@ function renderDashboard(){
 
 function renderMovRow(m, showActions){
   const p = produtoById(m.produtoId);
-  const destino = (m.tipo==='Saída'||m.tipo==='Devolução') ? (obraById(m.obraId)?.n || '—') : (fornecedorById(m.fornecedorId)?.n || m.motivo || '—');
+  const destino = (m.tipo==='Saída'||m.tipo==='Devolução') ? (m.centroCusto ? centroLabel(m.centroCusto) + (m.equipe ? ' · ' + m.equipe : '') : (obraById(m.obraId)?.n || '—')) : (fornecedorById(m.fornecedorId)?.n || m.motivo || '—');
   const badgeClass = m.tipo==='Entrada' ? 'entrada' : (m.tipo==='Devolução' ? 'neutral' : 'saida');
   return `
   <tr ${m.cancelado?'style="opacity:.45;text-decoration:line-through;"':''}>
@@ -1496,6 +1512,8 @@ function renderMovimentacao(){
         </select>
       </div>
     ` : `
+      ${destinoLoteHtml(f)}
+      ${f.centro ? '' : `
       <div class="form-row autocomplete" style="position:relative;">
         <label>Obra (centro de custo)${f.tipo==='Devolução' ? ' — obra de origem' : ''}</label>
         ${f.obraId ? `
@@ -1520,6 +1538,7 @@ function renderMovimentacao(){
           <span>Não descontar do estoque — usar quando o material já foi consumido antes (ex: obra que já estava em andamento antes do sistema começar a controlar). Só registra o custo pra essa obra, sem mexer no saldo atual.</span>
         </label>` : ''}
       </div>
+      `}
     `}
 
     <div class="section-head" style="margin-top:18px;">
@@ -1582,7 +1601,7 @@ function renderMovimentacao(){
         </div>` : ''}
         <div><button id="lote-add-item">+ Adicionar</button></div>
       </div>
-      ${(f.tipo==='Saída'||f.tipo==='Devolução') && state.movLoteVertente==='aluminio' ? `
+      ${(f.tipo==='Saída'||f.tipo==='Devolução') && !f.centro && state.movLoteVertente==='aluminio' ? `
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1.6fr;gap:8px;align-items:end;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);">
         <div class="form-row" style="margin-bottom:0;"><label>KG bruto${f.tipo==='Saída'?' *':''}</label>
           <input type="number" id="lote-item-kgb" min="0" step="0.001" value="${esc(state.movLoteKgBruto)}" placeholder="0"></div>
@@ -2396,6 +2415,155 @@ function renderFornecedores(){
   `;
 }
 
+/* ================= CENTROS DE CUSTO (Produção / Instalação) + EQUIPES ================= */
+function centroLabel(c){ return c==='PRODUCAO' ? 'Produção' : (c==='INSTALACAO' ? 'Instalação' : (c||'')); }
+function equipesAtivas(){ return state.equipes.filter(e=>e.centro==='INSTALACAO' && e.ativa).sort((a,b)=>a.nome.localeCompare(b.nome)); }
+function equipesNomes(atual){
+  const n = equipesAtivas().map(e=>e.nome);
+  if(atual && !n.includes(atual)) n.push(atual);
+  return n;
+}
+function destinoLoteHtml(f){
+  return `
+      <div class="form-row">
+        <label>Destino do material</label>
+        <div class="type-toggle">
+          <button class="entrada ${!f.centro?'active':''}" data-lotecentro="">Obra</button>
+          <button class="entrada ${f.centro==='PRODUCAO'?'active':''}" data-lotecentro="PRODUCAO">Produção (fábrica)</button>
+          <button class="entrada ${f.centro==='INSTALACAO'?'active':''}" data-lotecentro="INSTALACAO">Instalação</button>
+        </div>
+        ${f.centro==='PRODUCAO' ? '<div class="hint">Uso do dia a dia da fábrica — entra no custo de Produção, sem ligar a nenhuma obra.</div>' : ''}
+        ${f.centro==='INSTALACAO' ? `
+        <div class="hint">Uso do dia a dia das equipes de instalação — sem ligar a nenhuma obra.</div>
+        <div class="form-row" style="margin-top:8px;">
+          <label>Equipe que retirou *</label>
+          <select id="lote-equipe">
+            <option value="">Selecione…</option>
+            ${equipesAtivas().map(e=>`<option value="${esc(e.nome)}" ${f.equipe===e.nome?'selected':''}>${esc(e.nome)}</option>`).join('')}
+          </select>
+          ${equipesAtivas().length===0 ? '<div class="hint">Nenhuma equipe cadastrada. O admin cadastra em Configurações.</div>' : ''}
+        </div>` : ''}
+      </div>`;
+}
+function mesDaMov(m){
+  const d = new Date(m.data);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+}
+function valorMovCentro(m){
+  const v = (m.qtd||0) * (precoNaMovimentacao(m)||0);
+  return m.tipo==='Devolução' ? -v : v;
+}
+function movsCentro(centro, mes){
+  return movAtivas().filter(m=> m.centroCusto===centro && (m.tipo==='Saída'||m.tipo==='Devolução') && (!mes || mesDaMov(m)===mes));
+}
+// agrupa por equipe (instalação) ou um grupo só (produção); dentro de cada grupo soma por produto
+function agruparCentro(centro, mes){
+  const grupos = new Map();
+  movsCentro(centro, mes).forEach(m=>{
+    const g = centro==='INSTALACAO' ? (m.equipe || '(sem equipe)') : 'Produção';
+    if(!grupos.has(g)) grupos.set(g, { nome:g, total:0, itens:new Map() });
+    const G = grupos.get(g);
+    const s = m.tipo==='Devolução' ? -1 : 1;
+    const v = valorMovCentro(m);
+    G.total += v;
+    const it = G.itens.get(m.produtoId) || { produtoId:m.produtoId, qtd:0, valor:0 };
+    it.qtd = round3(it.qtd + s*(m.qtd||0)); it.valor += v;
+    G.itens.set(m.produtoId, it);
+  });
+  return [...grupos.values()].sort((a,b)=>a.nome.localeCompare(b.nome));
+}
+function renderCentros(){
+  const aba = state.centroAba, mes = state.centroMes;
+  const grupos = agruparCentro(aba, mes);
+  const total = grupos.reduce((s,g)=>s+g.total,0);
+  const opcoesMes = fatMesesOpcoes();
+  return `
+  <div class="toolbar" style="gap:10px;flex-wrap:wrap;">
+    <div class="type-toggle">
+      <button class="entrada ${aba==='INSTALACAO'?'active':''}" data-centro-aba="INSTALACAO">Instalação (por equipe)</button>
+      <button class="entrada ${aba==='PRODUCAO'?'active':''}" data-centro-aba="PRODUCAO">Produção</button>
+    </div>
+    <select id="centro-mes">
+      <option value="" ${!mes?'selected':''}>Todos os meses</option>
+      ${opcoesMes.map(o=>`<option value="${o.v}" ${o.v===mes?'selected':''}>${o.l}</option>`).join('')}
+    </select>
+    <div style="margin-left:auto;"><b>Total ${esc(centroLabel(aba))}${mes?' em '+esc(fatMesLabel(mes)):''}: ${fmtMoney(total)}</b></div>
+  </div>
+  ${grupos.length===0 ? `<div class="empty"><b>Nenhum material lançado</b>Use "Registrar Movimentação" → Destino "${esc(centroLabel(aba))}".</div>` : `
+  ${aba==='INSTALACAO' ? `
+  <div class="table-wrap" style="margin-bottom:16px;"><table>
+    <thead><tr><th>Equipe</th><th class="num">Itens diferentes</th><th class="num">Total no período</th></tr></thead>
+    <tbody>${grupos.map(g=>`<tr><td><b>${esc(g.nome)}</b></td><td class="num">${g.itens.size}</td><td class="num">${fmtMoney(g.total)}</td></tr>`).join('')}</tbody>
+  </table></div>` : ''}
+  ${grupos.map(g=>`
+  <section>
+    <div class="section-head"><h2>${esc(g.nome)}</h2><span class="meta">${fmtMoney(g.total)}</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Produto</th><th class="num">Qtd.</th><th class="num">Valor</th></tr></thead>
+      <tbody>${[...g.itens.values()].sort((a,b)=>b.valor-a.valor).map(it=>{
+        const p = produtoById(it.produtoId);
+        return `<tr><td>${esc(p?p.n:'(produto removido)')}</td><td class="num">${fmtQtd(it.qtd, p?p.u:'un')}</td><td class="num">${fmtMoney(it.valor)}</td></tr>`;
+      }).join('')}</tbody>
+    </table></div>
+  </section>`).join('')}`}`;
+}
+function renderConfig(){
+  const eqs = state.equipes.filter(e=>e.centro==='INSTALACAO').sort((a,b)=>a.nome.localeCompare(b.nome));
+  return `
+  <section>
+    <div class="section-head"><h2>Equipes de instalação</h2></div>
+    <div class="form-card" style="max-width:640px;">
+      <div class="hint" style="margin-bottom:10px;">Estas equipes aparecem em Registrar Movimentação quando o destino é Instalação. Desative uma equipe que não existe mais: o histórico dela continua nos relatórios.</div>
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <input type="text" id="cfg-eq-nome" placeholder="Nome da nova equipe" style="flex:1;">
+        <button id="cfg-eq-add">+ Adicionar</button>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Equipe</th><th>Situação</th><th></th></tr></thead>
+        <tbody>
+          ${eqs.length===0 ? '<tr><td colspan="3"><div class="empty">Nenhuma equipe cadastrada.</div></td></tr>' : eqs.map(e=>`
+          <tr>
+            <td><b>${esc(e.nome)}</b></td>
+            <td><span class="badge ${e.ativa?'ok':'neutral'}">${e.ativa?'Ativa':'Desativada'}</span></td>
+            <td style="white-space:nowrap;"><button class="secondary small" data-eq-toggle="${e.id}">${e.ativa?'Desativar':'Ativar'}</button>
+              ${state.movimentacoes.some(m=>m.centroCusto==='INSTALACAO' && m.equipe===e.nome) ? '' : `<button class="secondary small" data-eq-del="${e.id}">Excluir</button>`}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>
+  </section>`;
+}
+async function adicionarEquipe(){
+  if(!souAdmin()) return;
+  const el = document.getElementById('cfg-eq-nome');
+  const nome = (el ? el.value : '').trim().toUpperCase();
+  if(!nome){ showToast('Informe o nome da equipe.', 'error'); return; }
+  if(state.equipes.some(e=>e.centro==='INSTALACAO' && e.nome.toUpperCase()===nome)){ showToast('Essa equipe já existe.', 'error'); return; }
+  state.saving = true; updateSaveIndicator();
+  const { data, error } = await sbClient.from('equipes').insert([{ nome, centro:'INSTALACAO' }]).select();
+  state.saving = false; updateSaveIndicator();
+  if(error){ showToast('Erro ao salvar equipe: '+error.message, 'error'); return; }
+  state.equipes.push(rowToEquipe(data[0]));
+  showToast('Equipe adicionada.');
+  render();
+}
+async function alternarEquipe(id){
+  if(!souAdmin()) return;
+  const e = state.equipes.find(x=>x.id===id); if(!e) return;
+  const { error } = await sbClient.from('equipes').update({ ativa: !e.ativa }).eq('id', id);
+  if(error){ showToast('Erro ao salvar: '+error.message, 'error'); return; }
+  e.ativa = !e.ativa; render();
+}
+async function excluirEquipe(id){
+  if(!souAdmin()) return;
+  const e = state.equipes.find(x=>x.id===id); if(!e) return;
+  if(state.movimentacoes.some(m=>m.centroCusto==='INSTALACAO' && m.equipe===e.nome)){ showToast('Essa equipe já tem lançamentos — desative em vez de excluir.', 'error'); return; }
+  if(!confirm('Excluir a equipe '+e.nome+'?')) return;
+  const { error } = await sbClient.from('equipes').delete().eq('id', id);
+  if(error){ showToast('Erro ao excluir: '+error.message, 'error'); return; }
+  state.equipes = state.equipes.filter(x=>x.id!==id); render();
+}
+
 /* ---- MODAL ---- */
 
 /* ---- EDITAR OBRA (obra + pedido juntos) ---- */
@@ -2506,9 +2674,13 @@ function renderMovModal(m){
     <div class="modal" data-stop="1">
       <h3>Editar lançamento</h3>
       <div class="hint" style="margin:0 0 12px 0;"><b>${esc(prod?prod.n:'(produto removido)')}</b> · ${esc(m.tipo)} em ${esc(fmtDate(m.data))}</div>
-      <div class="form-row"><label>Obra</label>
+      ${m.centroCusto ? `
+      <div class="form-row"><label>Centro de custo</label><input type="text" value="${esc(centroLabel(m.centroCusto))}" disabled></div>
+      ${m.centroCusto==='INSTALACAO' ? `<div class="form-row"><label>Equipe</label>
+        <select id="mv-equipe">${equipesNomes(m.equipe).map(n=>`<option value="${esc(n)}" ${n===m.equipe?'selected':''}>${esc(n)}</option>`).join('')}</select></div>` : ''}
+      ` : `<div class="form-row"><label>Obra</label>
         <select id="mv-obra">${obras.map(o=>`<option value="${o.id}" ${o.id===m.obraId?'selected':''}>${esc(o.n)}${o.pedido?' — '+esc(o.pedido):''}</option>`).join('')}</select>
-      </div>
+      </div>`}
       <div class="form-row-2">
         <div class="form-row"><label>Quantidade (${esc(unidadeLabel(prod?prod.u:'un'))})</label><input type="number" step="0.001" min="0" id="mv-qtd" value="${m.qtd}"></div>
         <div class="form-row"><label>Preço unitário (R$)</label><input type="number" step="0.01" min="0" id="mv-preco" value="${precoNaMovimentacao(m)}"></div>
@@ -2541,12 +2713,12 @@ function salvarEdicaoMov(){
   const qtd = parseFloat(String(document.getElementById('mv-qtd').value).replace(',','.'));
   const precoRaw = String(document.getElementById('mv-preco').value).trim().replace(',','.');
   const preco = precoRaw==='' ? null : parseFloat(precoRaw);
-  const obraId = Number(document.getElementById('mv-obra').value);
+  const obraId = mov.centroCusto ? null : Number(document.getElementById('mv-obra').value);
   const vertente = document.getElementById('mv-vertente').value;
   const lista = document.getElementById('mv-lista').value.trim();
   if(isNaN(qtd) || qtd<=0){ showToast('Informe uma quantidade maior que zero.', 'error'); return; }
   if(preco!==null && (isNaN(preco) || preco<0)){ showToast('Preço inválido.', 'error'); return; }
-  if(!obraById(obraId)){ showToast('Selecione a obra.', 'error'); return; }
+  if(!mov.centroCusto && !obraById(obraId)){ showToast('Selecione a obra.', 'error'); return; }
   const numO = id => { const t = String(document.getElementById(id).value).trim().replace(',','.'); return t==='' ? null : parseFloat(t); };
   let kgBruto = numO('mv-kgb'), kgLiquido = numO('mv-kgl'), precoSucata = numO('mv-psuc');
   if(vertente!=='aluminio'){ kgBruto = null; kgLiquido = null; precoSucata = null; }
@@ -2565,6 +2737,7 @@ function salvarEdicaoMov(){
     const delta = mov.tipo==='Devolução' ? diff : -diff;
     produto.q = round3(produto.q + delta);
   }
+  if(mov.centroCusto==='INSTALACAO'){ const eqEl = document.getElementById('mv-equipe'); if(eqEl && eqEl.value) mov.equipe = eqEl.value; }
   mov.qtd = qtd; mov.preco = preco; mov.obraId = obraId; mov.vertente = vertente; mov.listaCorte = lista || null;
   mov.kgBruto = kgBruto; mov.kgLiquido = kgLiquido; mov.precoSucata = precoSucata;
   const marca = `Editado por ${state.perfil?.email||'?'} em ${todayISO()}`;
@@ -3080,6 +3253,25 @@ function attachEvents(){
   });
   const loteNovaObra = document.getElementById('lote-nova-obra');
   if(loteNovaObra) loteNovaObra.addEventListener('click', ()=>{ state.modal={type:'obra'}; render(); });
+  $root.querySelectorAll('[data-lotecentro]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      state.movLote.centro = el.getAttribute('data-lotecentro');
+      state.movLote.obraId = ''; state.movLoteObraBusca = ''; state.movLote.equipe = '';
+      state.movLote.naoAfetaEstoque = false;
+      render();
+    });
+  });
+  const loteEquipe = document.getElementById('lote-equipe');
+  if(loteEquipe) loteEquipe.addEventListener('change', e=>{ state.movLote.equipe = e.target.value; });
+  const cfgAdd = document.getElementById('cfg-eq-add');
+  if(cfgAdd) cfgAdd.addEventListener('click', adicionarEquipe);
+  const cfgNome = document.getElementById('cfg-eq-nome');
+  if(cfgNome) cfgNome.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarEquipe(); } });
+  $root.querySelectorAll('[data-eq-toggle]').forEach(el=>{ el.addEventListener('click', ()=> alternarEquipe(Number(el.getAttribute('data-eq-toggle')))); });
+  $root.querySelectorAll('[data-eq-del]').forEach(el=>{ el.addEventListener('click', ()=> excluirEquipe(Number(el.getAttribute('data-eq-del')))); });
+  const cMes = document.getElementById('centro-mes');
+  if(cMes) cMes.addEventListener('change', e=>{ state.centroMes = e.target.value; render(); });
+  $root.querySelectorAll('[data-centro-aba]').forEach(el=>{ el.addEventListener('click', ()=>{ state.centroAba = el.getAttribute('data-centro-aba'); render(); }); });
   const loteNaoAfeta = document.getElementById('lote-nao-afeta-estoque');
   if(loteNaoAfeta) loteNaoAfeta.addEventListener('change', e=>{ state.movLote.naoAfetaEstoque = e.target.checked; });
 
@@ -3198,7 +3390,7 @@ function adicionarItemLote(){
   // alumínio: KG bruto / líquido / valor da sucata (obrigatórios na saída)
   let kgBruto = null, kgLiquido = null, precoSucata = null;
   const tipoLote = state.movLote.tipo;
-  if(state.movLoteVertente==='aluminio' && (tipoLote==='Saída'||tipoLote==='Devolução')){
+  if(state.movLoteVertente==='aluminio' && !state.movLote.centro && (tipoLote==='Saída'||tipoLote==='Devolução')){
     const obrig = tipoLote==='Saída';
     const num = v => { const t = String(v).trim().replace(',','.'); return t==='' ? null : parseFloat(t); };
     kgBruto = num(state.movLoteKgBruto); kgLiquido = num(state.movLoteKgLiq); precoSucata = num(state.movLotePrecoSucata);
@@ -3233,13 +3425,15 @@ function adicionarItemLote(){
 async function registrarLoteMovimentacoes(){
   const f = state.movLote;
   if(f.itens.length===0){ showToast('Adicione pelo menos um item.', 'error'); return; }
-  if((f.tipo==='Saída'||f.tipo==='Devolução') && !f.obraId){ showToast('Selecione a obra (centro de custo).', 'error'); return; }
+  const centro = (f.tipo==='Saída'||f.tipo==='Devolução') ? (f.centro || '') : '';
+  if((f.tipo==='Saída'||f.tipo==='Devolução') && !centro && !f.obraId){ showToast('Selecione a obra ou o centro de custo (Produção / Instalação).', 'error'); return; }
+  if(centro==='INSTALACAO' && !f.equipe){ showToast('Selecione a equipe que retirou o material.', 'error'); return; }
 
   const novasMovs = [];
   const produtosAfetados = new Map();
   const dataIso = f.data ? new Date(f.data+'T'+new Date().toTimeString().slice(0,8)).toISOString() : new Date().toISOString();
 
-  const pularEstoque = f.tipo==='Saída' && f.naoAfetaEstoque;
+  const pularEstoque = f.tipo==='Saída' && f.naoAfetaEstoque && !centro;
 
   f.itens.forEach(item=>{
     const produto = produtoById(item.produtoId);
@@ -3255,7 +3449,9 @@ async function registrarLoteMovimentacoes(){
       tipo: f.tipo,
       produtoId: item.produtoId,
       qtd: item.qtd,
-      obraId: (f.tipo==='Saída'||f.tipo==='Devolução') ? Number(f.obraId) : null,
+      obraId: ((f.tipo==='Saída'||f.tipo==='Devolução') && !centro) ? Number(f.obraId) : null,
+      centroCusto: centro || null,
+      equipe: centro==='INSTALACAO' ? f.equipe : null,
       fornecedorId: f.tipo==='Entrada' && f.fornecedorId ? Number(f.fornecedorId) : null,
       responsavel: f.responsavel || '',
       motivo: '',
