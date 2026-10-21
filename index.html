@@ -364,6 +364,9 @@ let state = {
   movLoteItemPreco: '',
   movLoteListaCorte: '',
   movLoteVertente: 'acessorio',
+  movLoteKgBruto: '',
+  movLoteKgLiq: '',
+  movLotePrecoSucata: (function(){ try{ return localStorage.getItem('kasa_preco_sucata') || ''; }catch(e){ return ''; } })(),
   acOpen: false,
   acIndex: -1,
   toast: null
@@ -468,13 +471,15 @@ function movToRow(m){
   return { id: m.id, tipo: m.tipo, produto_id: m.produtoId, quantidade: m.qtd, obra_id: m.obraId || null,
     fornecedor_id: m.fornecedorId || null, responsavel: m.responsavel || null, motivo: m.motivo || null,
     data: m.data, preco: m.preco ?? null, vertente: m.vertente || null, cancelado: !!m.cancelado, historico: !!m.historico,
-    nao_afeta_estoque: !!m.naoAfetaEstoque, lista_corte: m.listaCorte || null };
+    nao_afeta_estoque: !!m.naoAfetaEstoque, lista_corte: m.listaCorte || null,
+    kg_bruto: m.kgBruto ?? null, kg_liquido: m.kgLiquido ?? null, preco_sucata: m.precoSucata ?? null };
 }
 function rowToMov(r){
   return { id: r.id, tipo: r.tipo, produtoId: r.produto_id, qtd: r.quantidade, obraId: r.obra_id,
     fornecedorId: r.fornecedor_id, responsavel: r.responsavel, motivo: r.motivo, data: r.data,
     preco: r.preco, vertente: r.vertente, cancelado: r.cancelado, historico: r.historico,
-    naoAfetaEstoque: r.nao_afeta_estoque, listaCorte: r.lista_corte };
+    naoAfetaEstoque: r.nao_afeta_estoque, listaCorte: r.lista_corte,
+    kgBruto: r.kg_bruto, kgLiquido: r.kg_liquido, precoSucata: r.preco_sucata };
 }
 function pedToRow(p){
   return { id: p.id, ped: p.ped, status: p.status, casis: p.casis, cvsis: p.cvsis, caesis: p.caesis, cmvsis: p.cmvsis,
@@ -1530,7 +1535,7 @@ function renderMovimentacao(){
           <tr>
             <td>${esc(it.nome)}</td>
             <td class="num">${fmtQtd(it.qtd, it.unidade)}</td>
-            ${f.tipo!=='Entrada'?`<td><span class="badge neutral">${esc(vertenteLabel(it.vertente))}</span></td>`:''}
+            ${f.tipo!=='Entrada'?`<td><span class="badge neutral">${esc(vertenteLabel(it.vertente))}</span>${pesoMovHtml(it)}</td>`:''}
             ${f.naoAfetaEstoque?`<td class="num">${it.precoManual!=null ? fmtMoney(it.precoManual) : `<span style="color:var(--ink-soft);">atual</span>`}</td>`:''}
             ${f.tipo==='Saída'||f.tipo==='Devolução'?`<td>${esc(it.listaCorte)||'—'}</td>`:''}
             <td><button class="danger small" data-del-item-lote="${it.id}">Remover</button></td>
@@ -1577,6 +1582,17 @@ function renderMovimentacao(){
         </div>` : ''}
         <div><button id="lote-add-item">+ Adicionar</button></div>
       </div>
+      ${(f.tipo==='Saída'||f.tipo==='Devolução') && state.movLoteVertente==='aluminio' ? `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1.6fr;gap:8px;align-items:end;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);">
+        <div class="form-row" style="margin-bottom:0;"><label>KG bruto${f.tipo==='Saída'?' *':''}</label>
+          <input type="number" id="lote-item-kgb" min="0" step="0.001" value="${esc(state.movLoteKgBruto)}" placeholder="0"></div>
+        <div class="form-row" style="margin-bottom:0;"><label>KG líquido${f.tipo==='Saída'?' *':''}</label>
+          <input type="number" id="lote-item-kgl" min="0" step="0.001" value="${esc(state.movLoteKgLiq)}" placeholder="0"></div>
+        <div class="form-row" style="margin-bottom:0;"><label>Valor da sucata (R$/kg)${f.tipo==='Saída'?' *':''}</label>
+          <input type="number" id="lote-item-psuc" min="0" step="0.01" value="${esc(state.movLotePrecoSucata)}" placeholder="0,00"></div>
+        <div class="hint" id="lote-sucata-calc" style="margin:0 0 8px 0;">${loteSucataTexto()}</div>
+      </div>
+      <div class="hint" style="margin-top:6px;">${f.tipo==='Saída' ? 'Alumínio: KG bruto, KG líquido e valor da sucata são obrigatórios. A sucata (bruto − líquido) vira crédito e abate o custo real de alumínio da obra.' : 'Devolução de alumínio: preencha os KG só se quiser abatê-los do peso e da sucata da obra (opcional).'}</div>` : ''}
       ${f.tipo==='Saída' && f.naoAfetaEstoque ? `<div class="hint" style="margin-top:8px;">Deixe "Preço da época" em branco pra usar o preço atual do produto.</div>` : ''}
       <div class="hint" style="margin-top:8px;">Dica: depois de digitar a quantidade, aperte Enter pra adicionar rápido e já ir pro próximo item.</div>
     </div>
@@ -1749,7 +1765,7 @@ function renderObraDetail(){
         <tr ${m.cancelado?'style="opacity:.45;text-decoration:line-through;"':''}>
           <td>${fmtDate(m.data)}</td>
           <td>${esc(produtoById(m.produtoId)?.n||'—')} ${m.tipo==='Devolução'?'<span class="badge neutral" style="margin-left:6px;">Devolução</span>':''}${m.naoAfetaEstoque?' <span class="badge neutral" style="font-size:9.5px;" title="Não descontou do saldo do estoque">histórico</span>':''}</td>
-          <td><span class="badge neutral">${esc(vertenteLabel(m.vertente))}</span></td>
+          <td><span class="badge neutral">${esc(vertenteLabel(m.vertente))}</span>${pesoMovHtml(m)}</td>
           <td>${esc(m.listaCorte||'—')}</td>
           <td class="num">${fmtQtd(m.qtd, produtoById(m.produtoId)?.u)}</td>
           <td class="num">${fmtMoney(precoNaMovimentacao(m))}</td>
@@ -1769,14 +1785,51 @@ function renderObraDetail(){
 }
 
 /* ---- COMPARATIVO SISTEMA x REAL ---- */
+// Sucata de alumínio: vem de cada lançamento (KG bruto − KG líquido) × valor da sucata (R$/kg) do dia.
+function sucataKgMov(m){
+  if(m.kgBruto===null || m.kgBruto===undefined || m.kgLiquido===null || m.kgLiquido===undefined) return 0;
+  return round3(m.kgBruto - m.kgLiquido);
+}
+function creditoSucataMov(m){ return sucataKgMov(m) * (m.precoSucata||0); }
+function aluminioPesosObra(obraId){
+  const r = {bruto:0, liquido:0, sucataKg:0, credito:0, temKg:false};
+  movAtivas()
+    .filter(m=> m.obraId===obraId && (m.tipo==='Saída'||m.tipo==='Devolução') && (m.vertente||'acessorio')==='aluminio')
+    .forEach(m=>{
+      if((m.kgBruto===null||m.kgBruto===undefined) && (m.kgLiquido===null||m.kgLiquido===undefined)) return;
+      const s = m.tipo==='Devolução' ? -1 : 1;
+      r.temKg = true;
+      r.bruto += s*(m.kgBruto||0);
+      r.liquido += s*(m.kgLiquido||0);
+      r.sucataKg += s*sucataKgMov(m);
+      r.credito += s*creditoSucataMov(m);
+    });
+  r.bruto = round3(r.bruto); r.liquido = round3(r.liquido); r.sucataKg = round3(r.sucataKg);
+  r.credito = Math.round(r.credito*100)/100;
+  return r;
+}
 function sobraKg(ped){
-  if(ped.pbruto===null || ped.pbruto===undefined || ped.pliq===null || ped.pliq===undefined) return null;
-  return round3(ped.pbruto - ped.pliq);
+  if(!ped.obraId) return null;
+  const r = aluminioPesosObra(ped.obraId);
+  return r.temKg ? r.sucataKg : null;
 }
 function creditoSucata(ped){
-  const sobra = sobraKg(ped);
-  if(sobra===null || !ped.precoSucata) return 0;
-  return sobra * ped.precoSucata;
+  if(!ped.obraId) return 0;
+  return aluminioPesosObra(ped.obraId).credito;
+}
+function pesoMovHtml(m){
+  if(m.kgBruto===null||m.kgBruto===undefined) return '';
+  const s = sucataKgMov(m);
+  return `<div style="font-size:11px;color:var(--ink-soft);margin-top:3px;">bruto ${fmtNum(m.kgBruto)} kg · líq. ${fmtNum(m.kgLiquido)} kg · sucata ${fmtNum(s)} kg${m.precoSucata?` × ${fmtMoney(m.precoSucata)} = ${fmtMoney(s*m.precoSucata)}`:''}</div>`;
+}
+function loteSucataTexto(){
+  const b = parseFloat(String(state.movLoteKgBruto).replace(',','.'));
+  const l = parseFloat(String(state.movLoteKgLiq).replace(',','.'));
+  const p = parseFloat(String(state.movLotePrecoSucata).replace(',','.'));
+  if(isNaN(b) || isNaN(l)) return 'Sucata = KG bruto − KG líquido.';
+  if(l > b) return 'Atenção: KG líquido maior que o bruto.';
+  const s = round3(b - l);
+  return `Sucata: ${fmtNum(s)} kg` + ((!isNaN(p) && p>0) ? ` × ${fmtMoney(p)} = ${fmtMoney(s*p)} de crédito` : '');
 }
 function temMovimentacaoVertente(obraId, vertente){
   return movAtivas().some(m=> m.obraId===obraId && (m.tipo==='Saída'||m.tipo==='Devolução') && (m.vertente||'acessorio')===vertente);
@@ -1788,8 +1841,8 @@ function aluminioReal(ped){
   const base = (ped.obraId && temMovimentacaoVertente(ped.obraId,'aluminio'))
     ? custoObraPorVertente(ped.obraId).aluminio
     : (ped.careal || 0);
-  // a sucata (sobra de alumínio bruto menos líquido) entra como crédito, reduzindo
-  // o custo real de alumínio gasto na obra.
+  // custo real = alumínio bruto (R$) − sucata (R$), com a sucata calculada nos lançamentos
+  // (KG bruto − KG líquido) × valor da sucata do dia.
   return base - creditoSucata(ped);
 }
 function vidroReal(ped){
@@ -2157,6 +2210,9 @@ function renderPedidoDetail(){
   const sobra = sobraKg(p);
   const sistemaSobra = (p.abkg!==null && p.abkg!==undefined && p.alkg!==null && p.alkg!==undefined) ? round3(p.abkg - p.alkg) : null;
   const credito = creditoSucata(p);
+  const pes = p.obraId ? aluminioPesosObra(p.obraId) : {bruto:0, liquido:0, sucataKg:0, credito:0, temKg:false};
+  const pesoBrutoReal = pes.temKg ? pes.bruto : null;
+  const pesoLiqReal = pes.temKg ? pes.liquido : null;
 
   const vertenteMap = {'Alumínio':'aluminio','Vidro':'vidro','Acessório':'acessorio'};
   const linhas = [
@@ -2210,12 +2266,12 @@ function renderPedidoDetail(){
   </section>
 
   <section>
-    <div class="section-head"><h2>Peso e vidro — previsto (sistema) × pesado (real)</h2></div>
+    <div class="section-head"><h2>Peso e vidro — previsto (sistema) × real (dos lançamentos de alumínio)</h2></div>
     <div class="table-wrap"><table>
       <thead><tr><th>Medida</th><th class="num">Sistema (previsto)</th><th class="num">Real (pesado)</th><th>Diferença</th></tr></thead>
       <tbody>
-        <tr><td>Alumínio bruto (kg)</td><td class="num">${fmtNum(p.abkg)}</td><td class="num">${fmtNum(p.pbruto)}</td><td>${badgeDeltaPeso(p.abkg, p.pbruto)}</td></tr>
-        <tr><td>Alumínio líquido (kg)</td><td class="num">${fmtNum(p.alkg)}</td><td class="num">${fmtNum(p.pliq)}</td><td>${badgeDeltaPeso(p.alkg, p.pliq)}</td></tr>
+        <tr><td>Alumínio bruto (kg)</td><td class="num">${fmtNum(p.abkg)}</td><td class="num">${fmtNum(pesoBrutoReal)}</td><td>${badgeDeltaPeso(p.abkg, pesoBrutoReal)}</td></tr>
+        <tr><td>Alumínio líquido (kg)</td><td class="num">${fmtNum(p.alkg)}</td><td class="num">${fmtNum(pesoLiqReal)}</td><td>${badgeDeltaPeso(p.alkg, pesoLiqReal)}</td></tr>
         <tr style="background:#faf8f3;"><td><b>Sobra (sucata)</b></td><td class="num">${fmtNum(sistemaSobra)}</td><td class="num"><b>${sobra===null?'—':fmtNum(sobra)+' kg'}</b></td><td><span class="badge neutral">bruto − líquido</span></td></tr>
         <tr><td>Vidro (m²)</td><td class="num">${fmtNum(p.vidm2)}</td><td class="num">—</td><td><span class="badge neutral">sem medição</span></td></tr>
       </tbody>
@@ -2225,15 +2281,15 @@ function renderPedidoDetail(){
 
   <section>
     <div class="section-head"><h2>Crédito de sucata no custo do alumínio</h2></div>
-    <div class="form-card" style="max-width:560px;padding:16px 18px;">
-      <div class="hint" style="margin-bottom:10px;">A sobra (alumínio bruto − líquido) vira sucata e entra como <b>crédito</b>, reduzindo o custo real de alumínio da obra.</div>
-      <div class="form-row"><label>Preço da sucata (R$/kg)</label><input type="number" step="0.01" id="ped-precosucata" value="${p.precoSucata??''}" placeholder="0,00"></div>
-      <div class="grid-cards" style="grid-template-columns:repeat(3,1fr);margin-top:10px;">
-        <div class="card"><div class="k">Sobra</div><div class="v" style="font-size:16px;">${sobra===null?'—':fmtNum(sobra)+' kg'}</div></div>
-        <div class="card"><div class="k">Crédito de sucata</div><div class="v" style="font-size:16px;color:var(--green);">${fmtMoney(credito)}</div></div>
-        <div class="card"><div class="k">Alumínio real (já com crédito)</div><div class="v" style="font-size:16px;">${fmtMoney(alumReal)}</div></div>
+    <div class="form-card" style="max-width:760px;padding:16px 18px;">
+      <div class="hint" style="margin-bottom:10px;">Calculado nos lançamentos de alumínio (Registrar Movimentação): sucata = KG bruto − KG líquido, vezes o valor da sucata informado em cada lançamento. Custo real do alumínio = alumínio bruto (R$) − sucata (R$).</div>
+      <div class="grid-cards" style="grid-template-columns:repeat(4,1fr);margin-top:10px;">
+        <div class="card"><div class="k">Alumínio bruto (R$)</div><div class="v" style="font-size:16px;">${fmtMoney(alumReal + credito)}</div></div>
+        <div class="card"><div class="k">Sucata</div><div class="v" style="font-size:16px;">${sobra===null?'—':fmtNum(sobra)+' kg'}</div></div>
+        <div class="card"><div class="k">Sucata (R$)</div><div class="v" style="font-size:16px;color:var(--green);">${fmtMoney(credito)}</div></div>
+        <div class="card"><div class="k">Alumínio real (bruto − sucata)</div><div class="v" style="font-size:16px;">${fmtMoney(alumReal)}</div></div>
       </div>
-      ${souAdmin() ? '<div class="form-actions" style="margin-top:14px;"><button id="ped-save-sucata" class="secondary">Salvar preço da sucata</button></div>' : ''}
+      ${!pes.temKg ? '<div class="hint" style="margin-top:10px;">Nenhum lançamento de alumínio com KG nesta obra ainda.</div>' : ''}
     </div>
   </section>
 
@@ -2255,10 +2311,6 @@ function renderPedidoDetail(){
       <div class="form-row-2">
         <div class="form-row"><label>Alumínio bruto sistema (kg)</label><input type="number" step="0.01" id="ped-abkg" value="${p.abkg??''}"></div>
         <div class="form-row"><label>Alumínio líquido sistema (kg)</label><input type="number" step="0.01" id="ped-alkg" value="${p.alkg??''}"></div>
-      </div>
-      <div class="form-row-2">
-        <div class="form-row"><label>Alumínio bruto real (kg)</label><input type="number" step="0.01" id="ped-pbruto" value="${p.pbruto??''}"></div>
-        <div class="form-row"><label>Alumínio líquido real (kg)</label><input type="number" step="0.01" id="ped-pliq" value="${p.pliq??''}"></div>
       </div>
       <div class="form-row"><label>Vidro sistema (m²)</label><input type="number" step="0.01" id="ped-vidm2" value="${p.vidm2??''}"></div>
       <div class="form-row"><label>Status</label>
@@ -2467,6 +2519,11 @@ function renderMovModal(m){
         </div>
         <div class="form-row"><label>Lista de corte</label><input type="text" id="mv-lista" value="${esc(m.listaCorte||'')}" placeholder="opcional"></div>
       </div>
+      <div class="form-row-2">
+        <div class="form-row"><label>KG bruto (só alumínio)</label><input type="number" step="0.001" min="0" id="mv-kgb" value="${m.kgBruto??''}"></div>
+        <div class="form-row"><label>KG líquido (só alumínio)</label><input type="number" step="0.001" min="0" id="mv-kgl" value="${m.kgLiquido??''}"></div>
+      </div>
+      <div class="form-row"><label>Valor da sucata (R$/kg)</label><input type="number" step="0.01" min="0" id="mv-psuc" value="${m.precoSucata??''}"></div>
       <div class="hint">${m.naoAfetaEstoque
         ? 'Este lançamento não descontou do estoque, então mudar a quantidade não altera o saldo.'
         : 'Se mudar a quantidade, o saldo do estoque é ajustado automaticamente pela diferença.'}</div>
@@ -2490,6 +2547,16 @@ function salvarEdicaoMov(){
   if(isNaN(qtd) || qtd<=0){ showToast('Informe uma quantidade maior que zero.', 'error'); return; }
   if(preco!==null && (isNaN(preco) || preco<0)){ showToast('Preço inválido.', 'error'); return; }
   if(!obraById(obraId)){ showToast('Selecione a obra.', 'error'); return; }
+  const numO = id => { const t = String(document.getElementById(id).value).trim().replace(',','.'); return t==='' ? null : parseFloat(t); };
+  let kgBruto = numO('mv-kgb'), kgLiquido = numO('mv-kgl'), precoSucata = numO('mv-psuc');
+  if(vertente!=='aluminio'){ kgBruto = null; kgLiquido = null; precoSucata = null; }
+  else {
+    if([kgBruto,kgLiquido,precoSucata].some(v=>v!==null && (isNaN(v)||v<0))){ showToast('Há um número inválido nos campos de alumínio.', 'error'); return; }
+    if(mov.tipo==='Saída' && (kgBruto===null || kgLiquido===null)){ showToast('Alumínio: informe o KG bruto e o KG líquido.', 'error'); return; }
+    if((kgBruto===null) !== (kgLiquido===null)){ showToast('Informe o KG bruto e o KG líquido juntos.', 'error'); return; }
+    if(kgBruto!==null && kgLiquido>kgBruto){ showToast('O KG líquido não pode ser maior que o KG bruto.', 'error'); return; }
+    if(mov.tipo==='Saída' && kgBruto!==null && (kgBruto-kgLiquido)>0 && !(precoSucata>0)){ showToast('Informe o valor da sucata (R$/kg).', 'error'); return; }
+  }
 
   const produto = produtoById(mov.produtoId);
   const diff = round3(qtd - mov.qtd);
@@ -2499,6 +2566,7 @@ function salvarEdicaoMov(){
     produto.q = round3(produto.q + delta);
   }
   mov.qtd = qtd; mov.preco = preco; mov.obraId = obraId; mov.vertente = vertente; mov.listaCorte = lista || null;
+  mov.kgBruto = kgBruto; mov.kgLiquido = kgLiquido; mov.precoSucata = precoSucata;
   const marca = `Editado por ${state.perfil?.email||'?'} em ${todayISO()}`;
   mov.motivo = mov.motivo ? (mov.motivo + ' | ' + marca) : marca;
   marcarMovDirty(mov);
@@ -2917,15 +2985,6 @@ function attachEvents(){
       render();
     });
   });
-  const pedSaveSucata = document.getElementById('ped-save-sucata');
-  if(pedSaveSucata) pedSaveSucata.addEventListener('click', ()=>{
-    const ped = state.pedidos.find(x=>x.id===state.pedidoSelecionado);
-    ped.precoSucata = numOrNull('ped-precosucata');
-    persist(['pedidos'], {pedidos:ped});
-    showToast('Preço da sucata salvo.');
-    render();
-  });
-
   // estoque
   const estSearch = document.getElementById('estoque-search');
   if(estSearch){
@@ -3067,7 +3126,17 @@ function attachEvents(){
     loteItemListaCorte.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarItemLote(); } });
   }
   const loteItemVertente = document.getElementById('lote-item-vertente');
-  if(loteItemVertente) loteItemVertente.addEventListener('change', e=>{ state.movLoteVertente = e.target.value; });
+  if(loteItemVertente) loteItemVertente.addEventListener('change', e=>{ state.movLoteVertente = e.target.value; render(); });
+  [['lote-item-kgb','movLoteKgBruto'],['lote-item-kgl','movLoteKgLiq'],['lote-item-psuc','movLotePrecoSucata']].forEach(([id,key])=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('input', e=>{
+      state[key] = e.target.value;
+      const c = document.getElementById('lote-sucata-calc');
+      if(c) c.textContent = loteSucataTexto();
+    });
+    el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarItemLote(); } });
+  });
   const loteAddItem = document.getElementById('lote-add-item');
   if(loteAddItem) loteAddItem.addEventListener('click', adicionarItemLote);
 
@@ -3125,6 +3194,21 @@ function adicionarItemLote(){
   if(!qtd || qtd<=0){ showToast('Informe uma quantidade válida.', 'error'); return; }
   const precoManualTxt = state.movLoteItemPreco.trim();
   const precoManual = precoManualTxt ? parseFloat(precoManualTxt) : null;
+
+  // alumínio: KG bruto / líquido / valor da sucata (obrigatórios na saída)
+  let kgBruto = null, kgLiquido = null, precoSucata = null;
+  const tipoLote = state.movLote.tipo;
+  if(state.movLoteVertente==='aluminio' && (tipoLote==='Saída'||tipoLote==='Devolução')){
+    const obrig = tipoLote==='Saída';
+    const num = v => { const t = String(v).trim().replace(',','.'); return t==='' ? null : parseFloat(t); };
+    kgBruto = num(state.movLoteKgBruto); kgLiquido = num(state.movLoteKgLiq); precoSucata = num(state.movLotePrecoSucata);
+    if([kgBruto,kgLiquido,precoSucata].some(v=>v!==null && (isNaN(v) || v<0))){ showToast('Há um número inválido nos campos de alumínio.', 'error'); return; }
+    if(obrig && (kgBruto===null || kgLiquido===null)){ showToast('Alumínio: informe o KG bruto e o KG líquido.', 'error'); return; }
+    if((kgBruto===null) !== (kgLiquido===null)){ showToast('Informe o KG bruto e o KG líquido juntos.', 'error'); return; }
+    if(kgBruto!==null && kgLiquido>kgBruto){ showToast('O KG líquido não pode ser maior que o KG bruto.', 'error'); return; }
+    if(obrig && kgBruto!==null && (kgBruto-kgLiquido)>0 && !(precoSucata>0)){ showToast('Informe o valor da sucata (R$/kg).', 'error'); return; }
+    if(precoSucata>0){ try{ localStorage.setItem('kasa_preco_sucata', String(precoSucata)); }catch(e){} }
+  }
   state.movLote.itens.push({
     id: nextItemLoteId(),
     produtoId: p.id,
@@ -3133,8 +3217,10 @@ function adicionarItemLote(){
     qtd: qtd,
     vertente: state.movLoteVertente,
     precoManual: precoManual,
-    listaCorte: state.movLoteListaCorte.trim() || null
+    listaCorte: state.movLoteListaCorte.trim() || null,
+    kgBruto, kgLiquido, precoSucata
   });
+  state.movLoteKgBruto = ''; state.movLoteKgLiq = '';
   state.movLoteProdutoSel = null;
   state.movLoteBusca = '';
   state.movLoteQtd = '';
@@ -3178,7 +3264,8 @@ async function registrarLoteMovimentacoes(){
       vertente: (f.tipo==='Saída'||f.tipo==='Devolução') ? item.vertente : null,
       cancelado: false,
       naoAfetaEstoque: pularEstoque,
-      listaCorte: item.listaCorte || null
+      listaCorte: item.listaCorte || null,
+      kgBruto: item.kgBruto ?? null, kgLiquido: item.kgLiquido ?? null, precoSucata: item.precoSucata ?? null
     };
     state.movimentacoes.push(mov);
     novasMovs.push(mov);
@@ -3453,10 +3540,7 @@ function salvarPedido(){
   ped.caereal = numOrNull('ped-caereal');
   ped.abkg = numOrNull('ped-abkg');
   ped.alkg = numOrNull('ped-alkg');
-  ped.pbruto = numOrNull('ped-pbruto');
-  ped.pliq = numOrNull('ped-pliq');
   ped.vidm2 = numOrNull('ped-vidm2');
-  ped.precoSucata = numOrNull('ped-precosucata');
   ped.status = document.getElementById('ped-status').value;
   ped.cmvsis = (ped.casis||0) + (ped.cvsis||0) + (ped.caesis||0);
   persist(['pedidos'], {pedidos:ped});
