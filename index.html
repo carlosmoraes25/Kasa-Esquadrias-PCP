@@ -494,14 +494,14 @@ function pedToRow(p){
     careal: p.careal, cvreal: p.cvreal, caereal: p.caereal, cmvreal: p.cmvreal, abkg: p.abkg, alkg: p.alkg, vidm2: p.vidm2,
     pbruto: p.pbruto, pliq: p.pliq, sucata: p.sucata || null, preco_sucata: p.precoSucata ?? null,
     obra_id: p.obraId || null, auto_vinculo: !!p.autoVinculo, valor_venda: p.valorVenda ?? null,
-    etapas_faturamento: p.etapasFaturamento || [] };
+    etapas_faturamento: p.etapasFaturamento || [], m2_instalacao: p.m2inst ?? null };
 }
 function rowToPed(r){
   return { id: r.id, ped: r.ped, status: r.status, casis: r.casis, cvsis: r.cvsis, caesis: r.caesis, cmvsis: r.cmvsis,
     careal: r.careal, cvreal: r.cvreal, caereal: r.caereal, cmvreal: r.cmvreal, abkg: r.abkg, alkg: r.alkg, vidm2: r.vidm2,
     pbruto: r.pbruto, pliq: r.pliq, sucata: r.sucata, precoSucata: r.preco_sucata,
     obraId: r.obra_id, autoVinculo: r.auto_vinculo, valorVenda: r.valor_venda,
-    etapasFaturamento: r.etapas_faturamento || [] };
+    etapasFaturamento: r.etapas_faturamento || [], m2inst: r.m2_instalacao ?? null };
 }
 
 function souAdmin(){ return state.perfil && state.perfil.role === 'admin'; }
@@ -740,7 +740,7 @@ function pedidosTexto(o){
   const nums = [p.pedido].concat(aditivosDe(p.id).map(a=>a.pedido)).filter(Boolean);
   return nums.join(' + ');
 }
-const SOMA_PED = ['casis','cvsis','caesis','cmvsis','careal','cvreal','caereal','cmvreal','abkg','alkg','vidm2','valorVenda'];
+const SOMA_PED = ['casis','cvsis','caesis','cmvsis','careal','cvreal','caereal','cmvreal','abkg','alkg','vidm2','valorVenda','m2inst'];
 // pedido "visão": para obra com aditivos, soma o pedido original com os aditivos (só para exibir/calcular)
 function pedidoVisao(obraId){
   const principal = principalDe(obraId);
@@ -1136,25 +1136,53 @@ function fatPctNoMes(f, mes){
   (f.instEtapas||[]).forEach(e=>{ if(e.mes===mes) total += Number(e.pct)||0; });
   return { total, prod };
 }
+function fatUltimoMes(f){
+  const ms = [f.matAluMes, f.matVidMes, f.matAceMes, f.prodCmMes, f.instRetMes]
+    .concat((f.prodEtapas||[]).map(e=>e.mes), (f.instEtapas||[]).map(e=>e.mes)).filter(Boolean);
+  return ms.length ? ms.sort().slice(-1)[0] : '';
+}
+// Detalhe do que foi faturado de uma obra em um mês, separado em material / produção / instalação.
+function fatDetalheMes(f, ped, mes){
+  const r2 = x => Math.round(x*100)/100;
+  const pctAlu = (f.matAlu && f.matAluMes===mes) ? FAT_PCT_MAT.alu : 0;
+  const pctVid = (f.matVid && f.matVidMes===mes) ? FAT_PCT_MAT.vid : 0;
+  const pctAce = (f.matAce && f.matAceMes===mes) ? FAT_PCT_MAT.ace : 0;
+  const matPct = pctAlu + pctVid + pctAce;
+  let cmPct = f.prodCmMes===mes ? FAT_PCT_CM : 0, prodEtPct = 0;
+  (f.prodEtapas||[]).forEach(e=>{ if(e.mes===mes) prodEtPct += Number(e.pct)||0; });
+  let retPct = f.instRetMes===mes ? FAT_PCT_RET : 0, instEtPct = 0;
+  (f.instEtapas||[]).forEach(e=>{ if(e.mes===mes) instEtPct += Number(e.pct)||0; });
+  const prodPct = r2(cmPct + prodEtPct), instPct = r2(retPct + instEtPct);
+  const total = r2(matPct + prodPct + instPct);
+  const vv = ped && ped.valorVenda!=null ? ped.valorVenda : null;
+  const val = p => vv!=null ? vv*p/100 : 0;
+  return { vv, pctAlu, pctVid, pctAce, matPct, cmPct, prodEtPct, retPct, instEtPct, prodPct, instPct, total,
+    valAlu:val(pctAlu), valVid:val(pctVid), valAce:val(pctAce), valMat:val(matPct), valProd:val(prodPct), valInst:val(instPct), valor:val(total),
+    kg: (prodPct>0 && ped && ped.alkg) ? ped.alkg*prodPct/25 : 0,
+    m2vid: (prodPct>0 && ped && ped.vidm2) ? ped.vidm2*prodPct/25 : 0,
+    m2inst: (instPct>0 && ped && ped.m2inst) ? ped.m2inst*instPct/25 : 0 };
+}
 function fatResumoMes(mes){
   const linhas = [];
-  let valor = 0, kg = 0, m2 = 0, semValor = 0, semPeso = 0, semVidro = 0;
+  const T = { valor:0, valMat:0, valProd:0, valInst:0, valAlu:0, valVid:0, valAce:0, kg:0, m2vid:0, m2inst:0 };
+  let semValor = 0, semPeso = 0, semVidro = 0, semM2inst = 0, finalizadas = 0;
   state.obras.filter(o=>!ehAditivo(o)).forEach(o=>{
     const f = state.fat.find(x=>x.obraId===o.id);
     if(!f) return;
-    const { total, prod } = fatPctNoMes(f, mes);
-    if(total<=0) return;
     const ped = pedidoVisao(o.id);
-    const vv = ped && ped.valorVenda!=null ? ped.valorVenda : null;
-    const v = vv!=null ? vv*total/100 : 0;
-    const m = (prod>0 && ped && ped.vidm2) ? ped.vidm2*prod/25 : 0;
-    if(vv==null) semValor++;
-    if(prod>0 && !(ped && ped.alkg)) semPeso++;
-    if(prod>0 && !(ped && ped.vidm2)) semVidro++;
-    valor += v; kg += (prod>0 && ped && ped.alkg) ? ped.alkg*prod/25 : 0; m2 += m;
-    linhas.push({ obra:o, total, prod, valor:v, kg:(prod>0 && ped && ped.alkg) ? ped.alkg*prod/25 : 0, m2:m });
+    const d = fatDetalheMes(f, ped, mes);
+    if(d.total<=0) return;
+    if(d.vv==null) semValor++;
+    if(d.prodPct>0 && !(ped && ped.alkg)) semPeso++;
+    if(d.prodPct>0 && !(ped && ped.vidm2)) semVidro++;
+    if(d.instPct>0 && !(ped && ped.m2inst)) semM2inst++;
+    const fim = fatCalc(f, ped).finalizado && fatUltimoMes(f)===mes;
+    if(fim) finalizadas++;
+    Object.keys(T).forEach(k=>{ T[k] += d[k]||0; });
+    linhas.push(Object.assign({ obra:o, finalizou:fim }, d));
   });
-  return { linhas, valor, kg, m2, semValor, semPeso, semVidro };
+  linhas.sort((a,b)=> b.valor - a.valor);
+  return Object.assign({ linhas, m2: T.m2vid, semValor, semPeso, semVidro, semM2inst, finalizadas }, T);
 }
 
 function fatMesesOpcoes(){
@@ -1216,6 +1244,84 @@ function fatEtapasHtml(f, grupo, ed){
     + `</div>`;
 }
 
+function fatFechamentoHtml(mes, R, custoTotal){
+  const mesTxt = esc(fatMesLabel(mes));
+  const pc = x => R.valor>0 ? Math.round(x/R.valor*1000)/10 : 0;
+  const cor = { mat:'#3d6f8f', prod:'#c8792a', inst:'#3f7d52' };
+  const caixa = (cr, titulo, valor, linhas)=>`
+    <div class="card" style="border-top:3px solid ${cr};">
+      <div class="k">${titulo}</div><div class="v" style="font-size:20px;">${fmtMoney(valor)}</div>
+      <div class="foot" style="line-height:1.6;">${linhas.join('<br>')}</div>
+    </div>`;
+  return `
+  <div class="toolbar" style="margin-bottom:10px;">
+    <div style="font-weight:600;font-size:14px;">Fechamento do mês</div>
+    ${fatSelMesResumo(mes)}
+  </div>
+
+  <div class="form-card" style="padding:16px 18px;margin-bottom:12px;">
+    <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+      <div class="k" style="font-size:12px;color:var(--ink-soft);">Total faturado em ${mesTxt}</div>
+      <div style="font-size:26px;font-weight:700;">${fmtMoney(R.valor)}</div>
+      <div style="color:var(--ink-soft);font-size:12.5px;">${R.linhas.length} obra(s) faturada(s) · ${R.finalizadas} finalizaram (100%) neste mês</div>
+    </div>
+    ${R.valor>0 ? `
+    <div style="display:flex;height:14px;border-radius:3px;overflow:hidden;margin:12px 0 6px 0;background:#eee;">
+      <div style="width:${pc(R.valMat)}%;background:${cor.mat};" title="Material"></div>
+      <div style="width:${pc(R.valProd)}%;background:${cor.prod};" title="Produção"></div>
+      <div style="width:${pc(R.valInst)}%;background:${cor.inst};" title="Instalação"></div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--ink-soft);">
+      <span><span style="display:inline-block;width:9px;height:9px;background:${cor.mat};border-radius:2px;"></span> Material ${pc(R.valMat)}%</span>
+      <span><span style="display:inline-block;width:9px;height:9px;background:${cor.prod};border-radius:2px;"></span> Produção ${pc(R.valProd)}%</span>
+      <span><span style="display:inline-block;width:9px;height:9px;background:${cor.inst};border-radius:2px;"></span> Instalação ${pc(R.valInst)}%</span>
+    </div>` : ''}
+  </div>
+
+  <div class="grid-cards" style="margin-bottom:10px;">
+    ${caixa(cor.mat,'MATERIAL faturado', R.valMat, [`Alumínio: <b>${fmtMoney(R.valAlu)}</b>`,`Vidro: <b>${fmtMoney(R.valVid)}</b>`,`Acessório: <b>${fmtMoney(R.valAce)}</b>`])}
+    ${caixa(cor.prod,'PRODUÇÃO faturada', R.valProd, [`Kg produzido: <b>${fmtNum(R.kg)} kg</b>`,`m² de vidro produzido: <b>${fmtNum(R.m2vid)} m²</b>`])}
+    ${caixa(cor.inst,'INSTALAÇÃO faturada', R.valInst, [`m² instalado: <b>${R.m2inst ? fmtNum(R.m2inst)+' m²' : '—'}</b>`, R.semM2inst ? `<span style="color:var(--amber);">${R.semM2inst} obra(s) sem m² de instalação cadastrado</span>` : 'esquadrias × instalação do mês ÷ 25%'])}
+    <div class="card"><div class="k">Custo estimado p/ terminar (todas as obras)</div><div class="v amber" style="font-size:20px;">${fmtMoney(custoTotal)}</div><div class="foot">material ainda não faturado, pelo custo sistema</div></div>
+  </div>
+  ${(R.semValor||R.semPeso||R.semVidro) ? `<div class="hint" style="margin-bottom:10px;">Atenção neste mês:
+    ${R.semValor?`${R.semValor} obra(s) sem valor de venda (não somam em R$). `:''}
+    ${R.semPeso?`${R.semPeso} obra(s) com produção mas sem peso líquido no sistema (kg zerado). `:''}
+    ${R.semVidro?`${R.semVidro} obra(s) com produção mas sem m² de vidro no sistema.`:''}</div>` : ''}
+
+  ${R.linhas.length ? `
+  <div class="table-wrap" style="margin-bottom:10px;overflow-x:auto;"><table>
+    <thead><tr>
+      <th>Obra</th><th class="num">Valor de venda</th>
+      <th class="num">Material</th><th class="num">Produção</th><th class="num">Instalação</th>
+      <th class="num">Total do mês</th><th class="num">Kg prod.</th><th class="num">m² vidro</th><th class="num">m² inst.</th>
+    </tr></thead>
+    <tbody>
+      ${R.linhas.map(l=>`<tr>
+        <td><b>${esc(l.obra.n)}</b> ${l.finalizou?'<span class="badge ok" style="font-size:9.5px;">finalizou</span>':''}<div style="color:var(--ink-soft);font-size:11.5px;">${esc(pedidosTexto(l.obra))}</div></td>
+        <td class="num">${l.vv!=null?fmtMoney(l.vv):'—'}</td>
+        <td class="num">${l.matPct?`${fmtMoney(l.valMat)}<div style="color:var(--ink-soft);font-size:10.5px;">${fmtNum(l.matPct)}%</div>`:'—'}</td>
+        <td class="num">${l.prodPct?`${fmtMoney(l.valProd)}<div style="color:var(--ink-soft);font-size:10.5px;">${fmtNum(l.prodPct)}%</div>`:'—'}</td>
+        <td class="num">${l.instPct?`${fmtMoney(l.valInst)}<div style="color:var(--ink-soft);font-size:10.5px;">${fmtNum(l.instPct)}%</div>`:'—'}</td>
+        <td class="num"><b>${fmtMoney(l.valor)}</b><div style="color:var(--ink-soft);font-size:10.5px;">${fmtNum(l.total)}%</div></td>
+        <td class="num">${l.kg?fmtNum(l.kg):'—'}</td><td class="num">${l.m2vid?fmtNum(l.m2vid):'—'}</td><td class="num">${l.m2inst?fmtNum(l.m2inst):'—'}</td>
+      </tr>`).join('')}
+      <tr style="font-weight:600;background:#faf8f3;"><td>Total do mês</td><td></td>
+        <td class="num">${fmtMoney(R.valMat)}</td><td class="num">${fmtMoney(R.valProd)}</td><td class="num">${fmtMoney(R.valInst)}</td>
+        <td class="num">${fmtMoney(R.valor)}</td><td class="num">${fmtNum(R.kg)}</td><td class="num">${fmtNum(R.m2vid)}</td><td class="num">${R.m2inst?fmtNum(R.m2inst):'—'}</td></tr>
+    </tbody>
+  </table></div>` : `<div class="hint" style="margin-bottom:10px;">Nenhuma obra com faturamento marcado em ${mesTxt}.</div>`}
+
+  <details style="margin-bottom:16px;"><summary style="cursor:pointer;font-size:12.5px;color:var(--ink-soft);">Como estes números são calculados</summary>
+    <div class="hint" style="margin-top:8px;line-height:1.7;">
+      <b>Valor</b> = valor de venda da obra × % marcado naquele mês. Material: alumínio 25%, vidro 15%, acessório 10%. Produção: FAT. CM 5% + etapas. Instalação: retenção 5% + etapas.<br>
+      <b>Kg produzido</b> = peso líquido do sistema × % de produção do mês ÷ 25. <b>m² de vidro</b> = m² de vidro × % de produção do mês ÷ 25. <b>m² instalado</b> = m² das esquadrias × % de instalação do mês ÷ 25.<br>
+      Dividimos por 25 porque a produção inteira (ou a instalação inteira) vale 25% do contrato: faturar tudo equivale a 100% dos kg ou m².<br>
+      <b>Exemplo:</b> obra de R$ 100.000, 2.000 kg e 80 m² de vidro. No mês: alumínio X (25%) + vidro X (15%) + CM (5%) + etapa de produção (10%) = 55% → <b>R$ 55.000</b> (material R$ 40.000, produção R$ 15.000). Produção do mês = 15% → kg = 2.000 × 15 ÷ 25 = <b>1.200 kg</b>; vidro = 80 × 15 ÷ 25 = <b>48 m²</b>.
+    </div>
+  </details>`;
+}
+
 function renderFatObras(){
   const ed = souAdmin();
   const mesAtual = state.fatMes || todayISO().slice(0,7);
@@ -1246,28 +1352,7 @@ function renderFatObras(){
     A tabela de faturamento ainda não existe no banco (${esc(state.fatErro)}). Rode o arquivo <b>criar_tabela_faturamento.sql</b> no SQL Editor do Supabase e recarregue a página.</div>` : ''}
   ${!ed ? `<div class="hint" style="margin-bottom:14px;">Somente o administrador edita o faturamento. Você está só visualizando.</div>` : ''}
 
-  <div class="toolbar" style="margin-bottom:10px;">
-    <div style="font-weight:600;font-size:14px;">Fechamento do mês</div>
-    ${fatSelMesResumo(mesAtual)}
-  </div>
-  <div class="grid-cards" style="margin-bottom:10px;">
-    <div class="card"><div class="k">Valor de venda faturado no mês</div><div class="v">${fmtMoney(resumo.valor)}</div><div class="foot">valor de venda × % faturado em ${esc(fatMesLabel(mesAtual))}</div></div>
-    <div class="card"><div class="k">Kg produzido no mês</div><div class="v">${fmtNum(resumo.kg)} kg</div><div class="foot">peso líquido × produção do mês ÷ 25%</div></div>
-    <div class="card"><div class="k">m² de vidro produzido no mês</div><div class="v">${fmtNum(resumo.m2)} m²</div><div class="foot">m² de vidro × produção do mês ÷ 25%</div></div>
-    <div class="card"><div class="k">Custo estimado p/ terminar (todas as obras)</div><div class="v amber">${fmtMoney(custoTotal)}</div><div class="foot">material ainda não faturado, pelo custo sistema</div></div>
-  </div>
-  ${(resumo.semValor||resumo.semPeso||resumo.semVidro) ? `<div class="hint" style="margin-bottom:10px;">Atenção neste mês:
-    ${resumo.semValor?`${resumo.semValor} obra(s) sem valor de venda (não somam em R$). `:''}
-    ${resumo.semPeso?`${resumo.semPeso} obra(s) com produção mas sem peso líquido no sistema (kg zerado). `:''}
-    ${resumo.semVidro?`${resumo.semVidro} obra(s) com produção mas sem m² de vidro no sistema.`:''}</div>` : ''}
-  ${resumo.linhas.length ? `
-  <details style="margin-bottom:16px;"><summary style="cursor:pointer;font-size:12.5px;color:var(--ink-soft);">Ver obras faturadas em ${esc(fatMesLabel(mesAtual))} (${resumo.linhas.length})</summary>
-    <div class="table-wrap" style="margin-top:8px;"><table>
-      <thead><tr><th>Obra</th><th class="num">% faturado no mês</th><th class="num">Valor faturado</th><th class="num">Kg produzido</th><th class="num">m² vidro</th></tr></thead>
-      <tbody>${resumo.linhas.map(l=>`<tr><td><b>${esc(l.obra.n)}</b> <span style="color:var(--ink-soft);font-size:11.5px;">${esc(l.obra.pedido||'')}</span></td>
-        <td class="num">${fmtNum(l.total)}%</td><td class="num">${fmtMoney(l.valor)}</td><td class="num">${l.kg?fmtNum(l.kg):'—'}</td><td class="num">${l.m2?fmtNum(l.m2):'—'}</td></tr>`).join('')}</tbody>
-    </table></div>
-  </details>` : `<div class="hint" style="margin-bottom:16px;">Nenhuma obra com faturamento marcado em ${esc(fatMesLabel(mesAtual))}.</div>`}
+  ${fatFechamentoHtml(mesAtual, resumo, custoTotal)}
 
   <div class="toolbar">
     <input type="text" class="search-input" id="fat-search" placeholder="Buscar por obra ou nº do pedido…" value="${esc(state.fatBusca)}">
@@ -2633,7 +2718,10 @@ function renderObraEditModal(o){
         <div class="form-row"><label>Peso bruto sistema (kg)</label><input type="number" step="0.01" id="oe-pbkg" value="${v(p.abkg)}"></div>
         <div class="form-row"><label>Peso líquido sistema (kg)</label><input type="number" step="0.01" id="oe-plkg" value="${v(p.alkg)}"></div>
       </div>
-      <div class="form-row"><label>Área de vidro (m²)</label><input type="number" step="0.01" id="oe-vidm2" value="${v(p.vidm2)}"></div>
+      <div class="form-row-2">
+        <div class="form-row"><label>Área de vidro (m²)</label><input type="number" step="0.01" id="oe-vidm2" value="${v(p.vidm2)}"></div>
+        <div class="form-row"><label>Esquadrias p/ instalação (m²)</label><input type="number" step="0.01" id="oe-m2inst" value="${v(p.m2inst)}"></div>
+      </div>
       <div class="section-head" style="margin:14px 0 8px 0;"><h2 style="font-size:12.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.03em;">Custo sistema (previsto)</h2></div>
       <div class="form-row-2">
         <div class="form-row"><label>Custo alumínio — sistema</label><input type="number" step="0.01" id="oe-casis" value="${v(p.casis)}"></div>
@@ -2662,10 +2750,10 @@ async function salvarEdicaoObra(){
   const num = id => numOrNull(id);
   const casis = num('oe-casis'), cvsis = num('oe-cvsis'), caesis = num('oe-caesis');
   const dados = {
-    valorVenda: num('oe-valorvenda'), abkg: num('oe-pbkg'), alkg: num('oe-plkg'), vidm2: num('oe-vidm2'),
+    valorVenda: num('oe-valorvenda'), abkg: num('oe-pbkg'), alkg: num('oe-plkg'), vidm2: num('oe-vidm2'), m2inst: num('oe-m2inst'),
     casis, cvsis, caesis, cmvsis: (casis||0)+(cvsis||0)+(caesis||0)
   };
-  for(const k of ['valorVenda','abkg','alkg','vidm2','casis','cvsis','caesis']){
+  for(const k of ['valorVenda','abkg','alkg','vidm2','m2inst','casis','cvsis','caesis']){
     if(dados[k]!==null && (isNaN(dados[k]) || dados[k]<0)){ showToast('Há um número inválido no formulário.', 'error'); return; }
   }
 
@@ -2896,6 +2984,7 @@ function renderObraModal(){
         <div class="form-row"><label>Peso líquido sistema (kg)</label><input type="number" step="0.01" id="of-plkg" placeholder="0"></div>
       </div>
       <div class="form-row"><label>Área de vidro (m²)</label><input type="number" step="0.01" id="of-vidm2" placeholder="0"></div>
+      <div class="form-row"><label>Área das esquadrias para instalação (m²)</label><input type="number" step="0.01" id="of-m2inst" placeholder="0"></div>
 
       <div class="section-head" style="margin:14px 0 8px 0;"><h2 style="font-size:12.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.03em;">Custo sistema (previsto)</h2></div>
       <div class="form-row-2">
@@ -3705,6 +3794,7 @@ async function salvarObra(){
   const caesis = numOrNull('of-caesis');
   const cmvsis = (casis||0) + (cvsis||0) + (caesis||0);
   const valorVenda = numOrNull('of-valorvenda');
+  const m2inst = numOrNull('of-m2inst');
 
   // já existe no que está carregado na tela? avisa antes de ir ao banco
   const dup = state.obras.find(o => (o.pedido||'').trim().toUpperCase() === pedido.toUpperCase());
@@ -3735,6 +3825,10 @@ async function salvarObra(){
     return; // a tela de cadastro continua aberta, com o que foi digitado
   }
 
+  if(m2inst!==null){
+    const { error: eM2 } = await sbClient.from('pedidos').update({ m2_instalacao: m2inst }).eq('id', data.pedido_id);
+    if(eM2){ console.error(eM2); showToast('Obra cadastrada, mas o m² de instalação não salvou: ' + eM2.message + ' (rode o SQL add_m2_instalacao.sql)', 'error'); }
+  }
   const nova = { id: data.obra_id, n: nome, st: 'Ativa', pedido: pedido, listasCorte: [], aditivoDe: null };
   const adEl = document.getElementById('of-aditivo');
   const adId = adEl && adEl.value ? Number(adEl.value) : null;
@@ -3750,7 +3844,7 @@ async function salvarObra(){
     careal: null, cvreal: null, caereal: null, cmvreal: null,
     abkg: pbkg, alkg: plkg, vidm2,
     pbruto: null, pliq: null, sucata: null, precoSucata: null,
-    obraId: nova.id, autoVinculo: false, valorVenda: valorVenda, etapasFaturamento: []
+    obraId: nova.id, autoVinculo: false, valorVenda: valorVenda, etapasFaturamento: [], m2inst
   });
   state.modal = null;
   if(state.view==='movimentacao'){ state.movLote.obraId = principalDe(nova.id); }
