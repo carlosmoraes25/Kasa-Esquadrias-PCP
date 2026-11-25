@@ -366,7 +366,7 @@ let state = {
   movLoteListaCorte: '',
   movLoteVertente: 'acessorio',
   equipes: [],
-  config: { custoFixo: null, mediaFaturada: null },
+  config: { custoFixo: null, mediaFaturada: null, precoSucata: null },
   configErro: null,
   centroAba: 'INSTALACAO',
   centroMes: todayISO().slice(0,7),
@@ -2744,13 +2744,13 @@ async function excluirEquipe(id){
 
 /* ================= SAÚDE FINANCEIRA ================= */
 async function fetchConfig(){
-  const vazio = { custoFixo: null, mediaFaturada: null };
+  const vazio = { custoFixo: null, mediaFaturada: null, precoSucata: null };
   try{
     const { data, error } = await sbClient.from('configuracoes').select('*');
     if(error){ console.warn('configuracoes:', error.message); state.configErro = error.message; return vazio; }
     state.configErro = null;
     const g = k => { const r = data.find(x=>x.chave===k); return r && r.valor!==null ? Number(r.valor) : null; };
-    return { custoFixo: g('custo_fixo'), mediaFaturada: g('media_faturada') };
+    return { custoFixo: g('custo_fixo'), mediaFaturada: g('media_faturada'), precoSucata: g('preco_sucata') };
   }catch(e){ state.configErro = String(e.message||e); return vazio; }
 }
 async function salvarConfig(chave, texto){
@@ -2762,12 +2762,12 @@ async function salvarConfig(chave, texto){
   const { error } = await sbClient.from('configuracoes').upsert([{ chave, valor: v }]);
   state.saving = false; updateSaveIndicator();
   if(error){ showToast('Erro ao salvar: ' + error.message + ' (rode o SQL add_saude_financeira.sql)', 'error'); return; }
-  if(chave==='custo_fixo') state.config.custoFixo = v; else state.config.mediaFaturada = v;
+  if(chave==='custo_fixo') state.config.custoFixo = v; else if(chave==='preco_sucata') state.config.precoSucata = v; else state.config.mediaFaturada = v;
   render();
 }
 // O que ainda falta faturar e o material que ainda falta gastar, de todas as obras com menos de 100% faturado.
 function saudeFinanceira(){
-  const R = { aFaturar:0, obrasAbertas:0, semValor:[], semCusto:[], alu:0, aluKg:0, vid:0, vidM2:0, ace:0, linhas:[] };
+  const R = { aFaturar:0, obrasAbertas:0, semValor:[], semCusto:[], semLiquido:[], alu:0, aluKg:0, aluLiqKg:0, sucataKg:0, vid:0, vidM2:0, ace:0, linhas:[] };
   state.obras.filter(o=>!ehAditivo(o)).forEach(o=>{
     const f = fatDaObra(o.id);
     const ped = pedidoVisao(o.id);
@@ -2782,23 +2782,35 @@ function saudeFinanceira(){
     if(!temCusto) R.semCusto.push(o.n);
     const alu = (!f.matAlu && ped) ? (ped.casis||0) : 0;
     const aluKg = (!f.matAlu && ped) ? (ped.abkg||0) : 0;
+    let aluLiqKg = 0, sucataKg = 0;
+    if(!f.matAlu && ped && aluKg>0){
+      if(ped.alkg==null) R.semLiquido.push(o.n);
+      else { aluLiqKg = ped.alkg; sucataKg = Math.max(0, aluKg - ped.alkg); }
+    }
     const vid = (!f.matVid && ped) ? (ped.cvsis||0) : 0;
     const vidM2 = (!f.matVid && ped) ? (ped.vidm2||0) : 0;
     const ace = (!f.matAce && ped) ? (ped.caesis||0) : 0;
-    R.aFaturar += aF; R.alu += alu; R.aluKg += aluKg; R.vid += vid; R.vidM2 += vidM2; R.ace += ace;
-    R.linhas.push({ obra:o, pct:c.total, aFaturar:aF, semValor:vv===null, alu, aluKg, vid, vidM2, ace });
+    R.aFaturar += aF; R.alu += alu; R.aluKg += aluKg; R.aluLiqKg += aluLiqKg; R.sucataKg += sucataKg; R.vid += vid; R.vidM2 += vidM2; R.ace += ace;
+    R.linhas.push({ obra:o, pct:c.total, aFaturar:aF, semValor:vv===null, alu, aluKg, sucataKg, vid, vidM2, ace });
   });
-  R.material = R.alu + R.vid + R.ace;
+  R.material = R.alu + R.vid + R.ace; // antes do crédito de sucata
   R.linhas.sort((a,b)=> b.aFaturar - a.aFaturar);
   return R;
 }
 function renderSaude(){
   const R = saudeFinanceira();
   const cfg = state.config || {};
+  // valor da sucata: o que você preencher; se vazio, sugere o do último lançamento de alumínio com sucata
+  const ultimo = [...state.movimentacoes].filter(m=>!m.cancelado && m.precoSucata>0).sort((a,b)=>new Date(b.data)-new Date(a.data))[0];
+  const sucataSugerida = ultimo ? ultimo.precoSucata : null;
+  const precoSucata = cfg.precoSucata ?? sucataSugerida;
+  const creditoSucata = (precoSucata && R.sucataKg>0) ? R.sucataKg * precoSucata : 0;
+  const aluLiquido = R.alu - creditoSucata;
+  R.materialLiquido = aluLiquido + R.vid + R.ace;
   const fixo = cfg.custoFixo, media = cfg.mediaFaturada;
   const meses = (media && media>0) ? R.aFaturar / media : null;
   const fixoPeriodo = (meses!==null && fixo!==null) ? meses * fixo : null;
-  const resultado = fixoPeriodo!==null ? R.aFaturar - R.material - fixoPeriodo : null;
+  const resultado = fixoPeriodo!==null ? R.aFaturar - R.materialLiquido - fixoPeriodo : null;
   const cor = { mat:'#3d6f8f', fat:'#3f7d52', tempo:'#c8792a' };
   const caixa = (titulo, valor, linhas, cr)=>`
     <div class="card" style="border-top:3px solid ${cr||'#3d4451'};">
@@ -2817,11 +2829,17 @@ function renderSaude(){
 
   <div class="section-head" style="margin-top:18px;"><h2>2. Material que ainda falta gastar para terminar</h2></div>
   <div class="grid-cards" style="margin-bottom:8px;">
-    ${caixa('Alumínio', fmtMoney(R.alu), [`<b>${fmtNum(R.aluKg)} kg</b> (peso bruto)`], cor.mat)}
+    ${caixa('Alumínio (a comprar, bruto)', fmtMoney(R.alu), [`<b>${fmtNum(R.aluKg)} kg</b> de peso bruto`, `Sucata esperada: <b>${fmtNum(R.sucataKg)} kg</b> (bruto − líquido)`, `Crédito da sucata: <b style="color:var(--green);">− ${fmtMoney(creditoSucata)}</b>`, `Alumínio após o crédito: <b>${fmtMoney(aluLiquido)}</b>`], cor.mat)}
     ${caixa('Vidro', fmtMoney(R.vid), [`<b>${fmtNum(R.vidM2)} m²</b>`], cor.mat)}
     ${caixa('Acessório', fmtMoney(R.ace), ['somente valor'], cor.mat)}
-    ${caixa('Material total', fmtMoney(R.material), ['pelo custo do sistema, só do que ainda não foi faturado como material'], '#3d4451')}
+    ${caixa('Material total (após crédito)', fmtMoney(R.materialLiquido), ['alumínio após o crédito + vidro + acessório', 'só do que ainda não foi faturado como material'], '#3d4451')}
   </div>
+  <div class="form-card" style="max-width:520px;padding:12px 16px;margin-bottom:10px;">
+    <div class="form-row" style="margin-bottom:4px;"><label>Valor da sucata (R$ por kg)</label>
+      <input type="number" step="0.01" min="0" id="saude-sucata" value="${cfg.precoSucata ?? ''}" placeholder="${sucataSugerida ? esc(String(sucataSugerida)) : '0,00'}"></div>
+    <div class="hint">${cfg.precoSucata!=null ? 'Valor que você definiu.' : (sucataSugerida ? `Usando o valor do último lançamento de alumínio (${fmtMoney(sucataSugerida)}/kg). Preencha para fixar outro.` : 'Preencha para calcular o crédito da sucata.')}</div>
+  </div>
+  ${R.semLiquido.length ? `<div class="hint" style="margin-bottom:10px;">${R.semLiquido.length} obra(s) com peso bruto mas sem peso líquido no sistema (sem sucata calculada): ${R.semLiquido.map(esc).join(', ')}.</div>` : ''}
   ${R.semCusto.length ? `<div class="hint" style="margin-bottom:14px;">${R.semCusto.length} obra(s) em aberto sem custo do sistema cadastrado (não entram no material): ${R.semCusto.map(esc).join(', ')}.</div>` : ''}
 
   <div class="section-head" style="margin-top:18px;"><h2>3. Quanto tempo leva para terminar tudo</h2></div>
@@ -2838,7 +2856,7 @@ function renderSaude(){
     </div>
     ${resultado!==null ? `
     <div class="hint" style="margin-top:10px;line-height:1.7;">
-      <b>Resultado projetado do que ainda falta</b> (estimativa): ${fmtMoney(R.aFaturar)} a faturar − ${fmtMoney(R.material)} de material − ${fmtMoney(fixoPeriodo)} de custo fixo = <b style="color:${resultado>=0?'var(--green)':'#a13c3c'};">${fmtMoney(resultado)}</b>.
+      <b>Resultado projetado do que ainda falta</b> (estimativa): ${fmtMoney(R.aFaturar)} a faturar − ${fmtMoney(R.materialLiquido)} de material (já com o crédito da sucata) − ${fmtMoney(fixoPeriodo)} de custo fixo = <b style="color:${resultado>=0?'var(--green)':'#a13c3c'};">${fmtMoney(resultado)}</b>.
       Não inclui outros custos (como mão de obra que não esteja no custo fixo).</div>` : ''}`}
   </div>
 
@@ -2859,7 +2877,7 @@ function renderSaude(){
   <details style="margin:16px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--ink-soft);">Como estes números são calculados</summary>
     <div class="hint" style="margin-top:8px;line-height:1.7;">
       <b>Valor de Venda a Faturar</b> = para cada obra com menos de 100% faturado, valor de venda × (100% − % já faturado). Obras com aditivo somam o pedido original e o aditivo.<br>
-      <b>Material a gastar</b> = custo do sistema do alumínio, vidro e acessório, só do que ainda não tem o X de material marcado na aba Faturamento. O kg é o peso bruto do sistema; o vidro vem em m².<br>
+      <b>Material a gastar</b> = custo do sistema do alumínio, vidro e acessório, só do que ainda não tem o X de material marcado na aba Faturamento. O kg é o peso bruto do sistema; o vidro vem em m².<br><b>Sucata</b> = peso bruto − peso líquido do sistema. <b>Crédito</b> = sucata (kg) × valor da sucata (R$/kg), e ele abate o custo do alumínio.<br>
       <b>Meses para terminar</b> = Valor de Venda a Faturar ÷ média de valor faturado por mês (número que você preenche). <b>Custo fixo até terminar</b> = meses × custo fixo mensal.
     </div>
   </details>`;
@@ -3585,9 +3603,9 @@ function attachEvents(){
   if(cfgNome) cfgNome.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarEquipe(); } });
   $root.querySelectorAll('[data-eq-toggle]').forEach(el=>{ el.addEventListener('click', ()=> alternarEquipe(Number(el.getAttribute('data-eq-toggle')))); });
   $root.querySelectorAll('[data-eq-del]').forEach(el=>{ el.addEventListener('click', ()=> excluirEquipe(Number(el.getAttribute('data-eq-del')))); });
-  ['saude-fixo','saude-media'].forEach(id=>{
+  [['saude-fixo','custo_fixo'],['saude-media','media_faturada'],['saude-sucata','preco_sucata']].forEach(([id,chave])=>{
     const el = document.getElementById(id);
-    if(el) el.addEventListener('change', ()=> salvarConfig(id==='saude-fixo' ? 'custo_fixo' : 'media_faturada', el.value));
+    if(el) el.addEventListener('change', ()=> salvarConfig(chave, el.value));
   });
   const cMes = document.getElementById('centro-mes');
   if(cMes) cMes.addEventListener('change', e=>{ state.centroMes = e.target.value; render(); });
