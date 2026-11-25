@@ -1810,8 +1810,12 @@ function renderObras(){
     const dif = (ped && sis) ? deltaPct(sis, real) : null;
     const margem = (venda && real!==null) ? (venda - real)/venda*100 : null;
     const fat = fatCalc(fatDaObra(o.id), ped).total;
+    const aberta = !!ped && ped.status!=='Finalizada';
+    const semKg = aberta && !(ped.abkg>0);
+    const semM2 = aberta && ped.cvsis>0 && !(ped.vidm2>0);
+    const semCusto = aberta && !(ped.cmvsis>0);
     const kgB = ped && ped.abkg!=null ? ped.abkg : null, kgL = ped && ped.alkg!=null ? ped.alkg : null, m2v = ped && ped.vidm2!=null ? ped.vidm2 : null;
-    return { obra:o, ped, venda, kgB, kgL, m2v, sis, real, dif, margem, fat, lancado:custoObra(o.id), n:itensObra(o.id).length, semPedido:!pedidoDaObra(o.id) };
+    return { obra:o, ped, venda, semKg, semM2, semCusto, kgB, kgL, m2v, sis, real, dif, margem, fat, lancado:custoObra(o.id), n:itensObra(o.id).length, semPedido:!pedidoDaObra(o.id) };
   });
   if(busca){
     rows = rows.filter(r=> r.obra.n.toLowerCase().includes(busca) || pedidosTexto(r.obra).toLowerCase().includes(busca));
@@ -1822,12 +1826,18 @@ function renderObras(){
     andamento: rows.filter(r=>r.ped && r.ped.status==='Em andamento').length,
     finalizada: rows.filter(r=>r.ped && r.ped.status==='Finalizada').length,
     estourou: rows.filter(r=>r.dif!==null && r.dif>10).length,
-    sem_pedido: rows.filter(r=>r.semPedido).length
+    sem_pedido: rows.filter(r=>r.semPedido).length,
+    sem_kg: rows.filter(r=>r.semKg).length,
+    sem_m2: rows.filter(r=>r.semM2).length,
+    sem_custo: rows.filter(r=>r.semCusto).length
   };
   if(filtro==='andamento') rows = rows.filter(r=>r.ped && r.ped.status==='Em andamento');
   if(filtro==='finalizada') rows = rows.filter(r=>r.ped && r.ped.status==='Finalizada');
   if(filtro==='estourou') rows = rows.filter(r=>r.dif!==null && r.dif>10);
   if(filtro==='sem_pedido') rows = rows.filter(r=>r.semPedido);
+  if(filtro==='sem_kg') rows = rows.filter(r=>r.semKg);
+  if(filtro==='sem_m2') rows = rows.filter(r=>r.semM2);
+  if(filtro==='sem_custo') rows = rows.filter(r=>r.semCusto);
   rows.sort((a,b)=>{
     const pa = pedidoDaObra(a.obra.id);
     const pb = pedidoDaObra(b.obra.id);
@@ -1843,7 +1853,7 @@ function renderObras(){
   <div class="toolbar">
     <input type="text" class="search-input" id="obras-search" placeholder="Buscar por nome da obra ou nº do pedido…" value="${esc(state.obrasSearch)}">
     <div class="pill-toggle">
-      ${pill('todas','Todas')}${pill('andamento','Em andamento')}${pill('finalizada','Finalizadas')}${pill('estourou','Estourou')}${pill('sem_pedido','Sem pedido')}
+      ${pill('todas','Todas')}${pill('andamento','Em andamento')}${pill('finalizada','Finalizadas')}${pill('estourou','Estourou')}${pill('sem_pedido','Sem pedido')}${pill('sem_kg','Sem kg bruto')}${pill('sem_m2','Sem m² vidro')}${pill('sem_custo','Sem custo sistema')}
     </div>
     <div style="margin-left:auto;display:flex;gap:8px;">
       ${souAdmin() ? `<button class="secondary" id="toggle-selecao-obras">${state.modoSelecaoObras ? 'Cancelar seleção' : 'Selecionar várias'}</button>` : ''}
@@ -1874,9 +1884,9 @@ function renderObras(){
             <div style="color:var(--ink-soft);font-size:11.5px;">${r.obra.pedido ? 'Pedido ' + esc(pedidosTexto(r.obra)) : 'sem nº de pedido'}${state.modoSelecaoObras && !podeExcluir ? ' <span style="color:var(--amber);">— tem movimentação, não pode excluir</span>' : ''}</div></td>
           <td>${r.ped ? `<span class="badge ${r.ped.status==='Finalizada'?'neutral':'ok'}">${esc(r.ped.status)}</span>` : '—'}</td>
           <td class="num">${r.venda!==null ? fmtMoney(r.venda) : '<span class="badge warn" style="font-size:9.5px;">sem valor</span>'}</td>
-          <td class="num">${r.kgB!==null ? fmtNum(r.kgB) : '—'}</td><td class="num">${r.kgL!==null ? fmtNum(r.kgL) : '—'}</td><td class="num">${r.m2v!==null ? fmtNum(r.m2v) : '—'}</td>
+          <td class="num">${r.semKg ? '<span class="badge warn" style="font-size:9.5px;">sem kg</span>' : (r.kgB!==null ? fmtNum(r.kgB) : '—')}</td><td class="num">${r.kgL!==null ? fmtNum(r.kgL) : '—'}</td><td class="num">${r.semM2 ? '<span class="badge warn" style="font-size:9.5px;">sem m²</span>' : (r.m2v!==null ? fmtNum(r.m2v) : '—')}</td>
           <td class="num">${fmtNum(r.fat)}%</td>
-          <td class="num">${r.sis ? fmtMoney(r.sis) : '—'}</td>
+          <td class="num">${r.semCusto ? '<span class="badge warn" style="font-size:9.5px;">sem custo</span>' : (r.sis ? fmtMoney(r.sis) : '—')}</td>
           <td class="num">${r.real!==null ? fmtMoney(r.real) : '—'}</td>
           <td>${r.ped ? badgeDeltaCusto(r.sis, r.real) : '—'}</td>
           <td class="num">${r.margem!==null ? `<span style="color:${r.margem>=0?'var(--green)':'#a13c3c'};">${fmtNum(r.margem)}%</span>` : '—'}</td>
@@ -2818,7 +2828,7 @@ async function salvarConfig(chave, texto){
 }
 // O que ainda falta faturar e o material que ainda falta gastar, de todas as obras com menos de 100% faturado.
 function saudeFinanceira(){
-  const R = { aFaturar:0, obrasAbertas:0, semValor:[], semCusto:[], semLiquido:[], alu:0, aluKg:0, aluLiqKg:0, sucataKg:0, vid:0, vidM2:0, ace:0, linhas:[] };
+  const R = { aFaturar:0, obrasAbertas:0, semValor:[], semCusto:[], semLiquido:[], semBruto:[], semM2:[], alu:0, aluKg:0, aluLiqKg:0, sucataKg:0, vid:0, vidM2:0, ace:0, linhas:[] };
   state.obras.filter(o=>!ehAditivo(o)).forEach(o=>{
     const f = fatDaObra(o.id);
     const ped = pedidoVisao(o.id);
@@ -2833,6 +2843,8 @@ function saudeFinanceira(){
     if(!temCusto) R.semCusto.push(o.n);
     const alu = (!f.matAlu && ped) ? (ped.casis||0) : 0;
     const aluKg = (!f.matAlu && ped) ? (ped.abkg||0) : 0;
+    if(!f.matAlu && ped && !(ped.abkg>0)) R.semBruto.push(o.n);
+    if(!f.matVid && ped && ped.cvsis>0 && !(ped.vidm2>0)) R.semM2.push(o.n);
     let aluLiqKg = 0, sucataKg = 0;
     if(!f.matAlu && ped && aluKg>0){
       if(ped.alkg==null) R.semLiquido.push(o.n);
@@ -2890,6 +2902,8 @@ function renderSaude(){
       <input type="number" step="0.01" min="0" id="saude-sucata" value="${cfg.precoSucata ?? ''}" placeholder="${sucataSugerida ? esc(String(sucataSugerida)) : '0,00'}"></div>
     <div class="hint">${cfg.precoSucata!=null ? 'Valor que você definiu.' : (sucataSugerida ? `Usando o valor do último lançamento de alumínio (${fmtMoney(sucataSugerida)}/kg). Preencha para fixar outro.` : 'Preencha para calcular o crédito da sucata.')}</div>
   </div>
+  ${R.semBruto.length ? `<div class="hint" style="background:#f3dede;color:#a13c3c;padding:10px 12px;border-radius:3px;margin-bottom:10px;"><b>Atenção:</b> ${R.semBruto.length} obra(s) em aberto sem peso bruto cadastrado. Os kg de alumínio e a sucata acima ficam <b>menores que o real</b> (o R$ do alumínio continua correto). Cadastre em Obras → Editar obra: ${R.semBruto.map(esc).join(', ')}.</div>` : ''}
+  ${R.semM2.length ? `<div class="hint" style="background:#f3dede;color:#a13c3c;padding:10px 12px;border-radius:3px;margin-bottom:10px;"><b>Atenção:</b> ${R.semM2.length} obra(s) em aberto com custo de vidro mas sem m² de vidro cadastrado. Os m² acima ficam <b>menores que o real</b> (o R$ do vidro continua correto). Cadastre em Obras → Editar obra: ${R.semM2.map(esc).join(', ')}.</div>` : ''}
   ${R.semLiquido.length ? `<div class="hint" style="margin-bottom:10px;">${R.semLiquido.length} obra(s) com peso bruto mas sem peso líquido no sistema (sem sucata calculada): ${R.semLiquido.map(esc).join(', ')}.</div>` : ''}
   ${R.semCusto.length ? `<div class="hint" style="margin-bottom:14px;">${R.semCusto.length} obra(s) em aberto sem custo do sistema cadastrado (não entram no material): ${R.semCusto.map(esc).join(', ')}.</div>` : ''}
 
