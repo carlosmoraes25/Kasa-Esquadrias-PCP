@@ -328,6 +328,7 @@ let state = {
   movimentacoes: [],
   pedidos: [],
   pedidoSelecionado: null,
+  obrasFiltro: 'todas',
   compFiltro: 'todos', // todos | andamento | finalizada | vinculados | sem_vinculo | estourou
   compSearch: '',
   fatMesFiltro: '',
@@ -1800,14 +1801,33 @@ function renderMovimentacao(){
 
 /* ---- OBRAS ---- */
 function renderObras(){
-  let rows = state.obras.filter(o=>!ehAditivo(o)).map(o=>({obra:o, custo:custoObra(o.id), n:itensObra(o.id).length}));
   const busca = state.obrasSearch.trim().toLowerCase();
+  let rows = state.obras.filter(o=>!ehAditivo(o)).map(o=>{
+    const ped = pedidoVisao(o.id);
+    const venda = ped && ped.valorVenda!=null ? ped.valorVenda : null;
+    const sis = ped ? ped.cmvsis : null;
+    const real = ped ? cmvRealCalc(ped) : null;
+    const dif = (ped && sis) ? deltaPct(sis, real) : null;
+    const margem = (venda && real!==null) ? (venda - real)/venda*100 : null;
+    const fat = fatCalc(fatDaObra(o.id), ped).total;
+    const kgB = ped && ped.abkg!=null ? ped.abkg : null, kgL = ped && ped.alkg!=null ? ped.alkg : null, m2v = ped && ped.vidm2!=null ? ped.vidm2 : null;
+    return { obra:o, ped, venda, kgB, kgL, m2v, sis, real, dif, margem, fat, lancado:custoObra(o.id), n:itensObra(o.id).length, semPedido:!pedidoDaObra(o.id) };
+  });
   if(busca){
-    rows = rows.filter(r=>
-      r.obra.n.toLowerCase().includes(busca) ||
-      pedidosTexto(r.obra).toLowerCase().includes(busca)
-    );
+    rows = rows.filter(r=> r.obra.n.toLowerCase().includes(busca) || pedidosTexto(r.obra).toLowerCase().includes(busca));
   }
+  const filtro = state.obrasFiltro || 'todas';
+  const cont = {
+    todas: rows.length,
+    andamento: rows.filter(r=>r.ped && r.ped.status==='Em andamento').length,
+    finalizada: rows.filter(r=>r.ped && r.ped.status==='Finalizada').length,
+    estourou: rows.filter(r=>r.dif!==null && r.dif>10).length,
+    sem_pedido: rows.filter(r=>r.semPedido).length
+  };
+  if(filtro==='andamento') rows = rows.filter(r=>r.ped && r.ped.status==='Em andamento');
+  if(filtro==='finalizada') rows = rows.filter(r=>r.ped && r.ped.status==='Finalizada');
+  if(filtro==='estourou') rows = rows.filter(r=>r.dif!==null && r.dif>10);
+  if(filtro==='sem_pedido') rows = rows.filter(r=>r.semPedido);
   rows.sort((a,b)=>{
     const pa = pedidoDaObra(a.obra.id);
     const pb = pedidoDaObra(b.obra.id);
@@ -1817,9 +1837,14 @@ function renderObras(){
     return b.obra.id - a.obra.id;
   });
   const qtdSelecionadas = state.obrasSelecionadas.size;
+  const soma = k => rows.reduce((s,r)=> s + (r[k]||0), 0);
+  const pill = (id,label)=>`<button data-obrasfilt="${id}" class="${filtro===id?'active':''}">${label} (${cont[id]})</button>`;
   return `
   <div class="toolbar">
     <input type="text" class="search-input" id="obras-search" placeholder="Buscar por nome da obra ou nº do pedido…" value="${esc(state.obrasSearch)}">
+    <div class="pill-toggle">
+      ${pill('todas','Todas')}${pill('andamento','Em andamento')}${pill('finalizada','Finalizadas')}${pill('estourou','Estourou')}${pill('sem_pedido','Sem pedido')}
+    </div>
     <div style="margin-left:auto;display:flex;gap:8px;">
       ${souAdmin() ? `<button class="secondary" id="toggle-selecao-obras">${state.modoSelecaoObras ? 'Cancelar seleção' : 'Selecionar várias'}</button>` : ''}
       ${state.modoSelecaoObras ? `<button class="danger" id="excluir-selecionadas-obras" ${qtdSelecionadas===0?'disabled':''}>Excluir ${qtdSelecionadas} selecionada${qtdSelecionadas===1?'':'s'}</button>` : ''}
@@ -1827,21 +1852,47 @@ function renderObras(){
     </div>
   </div>
   ${state.modoSelecaoObras ? `<div class="hint" style="margin-bottom:12px;">Só é possível excluir obras sem movimentação (0 saídas). As demais aparecem sem checkbox, por segurança.</div>` : ''}
-  ${rows.length===0 ? `<div class="empty"><b>${busca ? 'Nenhuma obra encontrada' : 'Nenhuma obra cadastrada'}</b>${busca ? 'Tente buscar por outro nome ou número de pedido.' : 'Cadastre uma obra para começar a controlar o custo de material por obra.'}</div>` : `
-  <div class="obras-grid">
-    ${rows.map(r=>{
-      const podeExcluir = r.n===0;
-      const marcada = state.obrasSelecionadas.has(r.obra.id);
-      return `
-      <div class="obra-card" ${state.modoSelecaoObras ? (podeExcluir ? `data-toggle-obra="${r.obra.id}" style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;${marcada?'border-color:var(--steel);background:#faf8f3;':''}"` : `style="display:flex;align-items:flex-start;gap:10px;opacity:.55;"`) : `data-obra="${r.obra.id}"`}>
-        ${state.modoSelecaoObras ? `<input type="checkbox" data-select-obra="${r.obra.id}" ${marcada?'checked':''} ${podeExcluir?'':'disabled'} style="margin-top:3px;pointer-events:none;">` : ''}
-        <div style="flex:1;">
-          <div class="nm">${esc(r.obra.n)}${r.obra.pedido ? ` <span style="font-weight:400;color:var(--ink-soft);font-size:11.5px;">· Pedido ${esc(pedidosTexto(r.obra))}</span>` : ''}${aditivosDe(r.obra.id).length ? ' <span class="badge neutral" style="font-size:9.5px;">com aditivo</span>' : ''}</div>
-          <div class="cost">${fmtMoney(r.custo)}</div>
-          <div class="items">${r.n} saída(s) de material${!pedidoDaObra(r.obra.id) ? ' <span class="badge warn" title="Esta obra não tem pedido no Comparativo — falta criar o pedido">sem pedido</span>' : ''}${state.modoSelecaoObras && !podeExcluir ? ' <span style="color:var(--amber);">— tem movimentação, não pode excluir</span>' : ''}</div>
-        </div>
-      </div>
-    `;}).join('')}
+  ${rows.length===0 ? `<div class="empty"><b>${busca ? 'Nenhuma obra encontrada' : 'Nenhuma obra nesta lista'}</b>${busca ? 'Tente buscar por outro nome ou número de pedido.' : 'Cadastre uma obra para começar a controlar o custo de material por obra.'}</div>` : `
+  <div class="table-wrap" style="overflow-x:auto;">
+  <table>
+    <thead><tr>
+      ${state.modoSelecaoObras ? '<th></th>' : ''}
+      <th>Obra</th><th>Status</th><th class="num">Valor de venda</th><th class="num" title="Peso bruto do sistema">Kg bruto</th><th class="num" title="Peso líquido do sistema">Kg líquido</th><th class="num" title="Área de vidro do sistema">m² vidro</th><th class="num">% faturado</th>
+      <th class="num" title="Custo previsto pelo sistema">Custo sistema</th><th class="num" title="Alumínio (com crédito de sucata) + vidro + acessório">Custo real</th><th>Dif.</th>
+      <th class="num" title="(venda − custo real) ÷ venda">Margem</th><th class="num" title="Material lançado no estoque (Registrar Movimentação)">Lançado no estoque</th><th class="num">Saídas</th>
+    </tr></thead>
+    <tbody>
+      ${rows.map(r=>{
+        const podeExcluir = r.n===0;
+        const marcada = state.obrasSelecionadas.has(r.obra.id);
+        const attrs = state.modoSelecaoObras
+          ? (podeExcluir ? `data-toggle-obra="${r.obra.id}" style="cursor:pointer;${marcada?'background:#faf8f3;':''}"` : `style="opacity:.55;"`)
+          : `data-obra="${r.obra.id}" style="cursor:pointer;"`;
+        return `<tr ${attrs}>
+          ${state.modoSelecaoObras ? `<td><input type="checkbox" data-select-obra="${r.obra.id}" ${marcada?'checked':''} ${podeExcluir?'':'disabled'} style="pointer-events:none;"></td>` : ''}
+          <td><b>${esc(r.obra.n)}</b>${aditivosDe(r.obra.id).length ? ' <span class="badge neutral" style="font-size:9.5px;">com aditivo</span>' : ''}${r.semPedido ? ' <span class="badge warn" style="font-size:9.5px;" title="Esta obra não tem pedido no Comparativo — falta criar o pedido">sem pedido</span>' : ''}
+            <div style="color:var(--ink-soft);font-size:11.5px;">${r.obra.pedido ? 'Pedido ' + esc(pedidosTexto(r.obra)) : 'sem nº de pedido'}${state.modoSelecaoObras && !podeExcluir ? ' <span style="color:var(--amber);">— tem movimentação, não pode excluir</span>' : ''}</div></td>
+          <td>${r.ped ? `<span class="badge ${r.ped.status==='Finalizada'?'neutral':'ok'}">${esc(r.ped.status)}</span>` : '—'}</td>
+          <td class="num">${r.venda!==null ? fmtMoney(r.venda) : '<span class="badge warn" style="font-size:9.5px;">sem valor</span>'}</td>
+          <td class="num">${r.kgB!==null ? fmtNum(r.kgB) : '—'}</td><td class="num">${r.kgL!==null ? fmtNum(r.kgL) : '—'}</td><td class="num">${r.m2v!==null ? fmtNum(r.m2v) : '—'}</td>
+          <td class="num">${fmtNum(r.fat)}%</td>
+          <td class="num">${r.sis ? fmtMoney(r.sis) : '—'}</td>
+          <td class="num">${r.real!==null ? fmtMoney(r.real) : '—'}</td>
+          <td>${r.ped ? badgeDeltaCusto(r.sis, r.real) : '—'}</td>
+          <td class="num">${r.margem!==null ? `<span style="color:${r.margem>=0?'var(--green)':'#a13c3c'};">${fmtNum(r.margem)}%</span>` : '—'}</td>
+          <td class="num">${fmtMoney(r.lancado)}</td>
+          <td class="num">${r.n}</td>
+        </tr>`;
+      }).join('')}
+      <tr style="font-weight:600;background:#faf8f3;">
+        ${state.modoSelecaoObras ? '<td></td>' : ''}
+        <td>Total (${rows.length} obra${rows.length===1?'':'s'})</td><td></td>
+        <td class="num">${fmtMoney(soma('venda'))}</td><td class="num">${fmtNum(soma('kgB'))}</td><td class="num">${fmtNum(soma('kgL'))}</td><td class="num">${fmtNum(soma('m2v'))}</td><td></td>
+        <td class="num">${fmtMoney(soma('sis'))}</td><td class="num">${fmtMoney(soma('real'))}</td><td></td><td></td>
+        <td class="num">${fmtMoney(soma('lancado'))}</td><td class="num">${soma('n')}</td>
+      </tr>
+    </tbody>
+  </table>
   </div>`}
   `;
 }
@@ -3498,6 +3549,7 @@ function attachEvents(){
     estSearch.addEventListener('input', e=>{ state.estoqueSearch = e.target.value; render(); preserveFocus('estoque-search'); });
   }
   // obras
+  $root.querySelectorAll('[data-obrasfilt]').forEach(el=>{ el.addEventListener('click', ()=>{ state.obrasFiltro = el.getAttribute('data-obrasfilt'); render(); }); });
   const obrasSearch = document.getElementById('obras-search');
   if(obrasSearch){
     obrasSearch.addEventListener('input', e=>{ state.obrasSearch = e.target.value; render(); preserveFocus('obras-search'); });
