@@ -460,10 +460,10 @@ function rowToProduto(r){
     p: r.preco, q: r.saldo, m: r.estoque_minimo, u: r.unidade || 'un', v: r.vertente || 'acessorio' };
 }
 function obraToRow(o){
-  return { id: o.id, nome: o.n, pedido: o.pedido || null, status: o.st || 'Ativa', listas_corte: o.listasCorte || [] };
+  return { id: o.id, nome: o.n, pedido: o.pedido || null, status: o.st || 'Ativa', listas_corte: o.listasCorte || [], aditivo_de: o.aditivoDe || null };
 }
 function rowToObra(r){
-  return { id: r.id, n: r.nome, pedido: r.pedido, st: r.status || 'Ativa', listasCorte: r.listas_corte || [] };
+  return { id: r.id, n: r.nome, pedido: r.pedido, st: r.status || 'Ativa', listasCorte: r.listas_corte || [], aditivoDe: r.aditivo_de || null };
 }
 function fornecedorToRow(f){
   return { id: f.id, nome: f.n, contato: f.contato || null, telefone: f.telefone || null, email: f.email || null, endereco: f.endereco || null, fonte: f.fonte || null };
@@ -728,9 +728,47 @@ function precoNaMovimentacao(m){
   const p = produtoById(m.produtoId);
   return (p && p.p) || 0;
 }
+/* ---- ADITIVOS: obra vinculada a outra obra (pedido complementar) ---- */
+function ehAditivo(o){ return !!(o && o.aditivoDe && obraById(o.aditivoDe)); }
+function principalDe(obraId){ const o = obraById(obraId); return ehAditivo(o) ? o.aditivoDe : obraId; }
+function aditivosDe(obraId){ return state.obras.filter(o=> o.aditivoDe===obraId); }
+function idsGrupo(obraId){ const p = principalDe(obraId); return [p].concat(aditivosDe(p).map(o=>o.id)); }
+// "540-2025 + 612-2025" quando a obra tem aditivos
+function pedidosTexto(o){
+  if(!o) return '';
+  const p = obraById(principalDe(o.id)) || o;
+  const nums = [p.pedido].concat(aditivosDe(p.id).map(a=>a.pedido)).filter(Boolean);
+  return nums.join(' + ');
+}
+const SOMA_PED = ['casis','cvsis','caesis','cmvsis','careal','cvreal','caereal','cmvreal','abkg','alkg','vidm2','valorVenda'];
+// pedido "visão": para obra com aditivos, soma o pedido original com os aditivos (só para exibir/calcular)
+function pedidoVisao(obraId){
+  const principal = principalDe(obraId);
+  const base = pedidoDaObra(principal);
+  const ads = aditivosDe(principal);
+  if(!ads.length) return base;
+  const partes = [base].concat(ads.map(a=>pedidoDaObra(a.id))).filter(Boolean);
+  if(partes.length<2) return base || partes[0];
+  const comb = Object.assign({}, partes[0]);
+  SOMA_PED.forEach(k=>{
+    const vals = partes.map(x=>x[k]).filter(v=>v!==null && v!==undefined);
+    comb[k] = vals.length ? vals.reduce((s,v)=>s+Number(v),0) : null;
+  });
+  const obraP = obraById(principal);
+  comb.ped = partes[0].ped + ads.map(a=>` + Pedido ${a.pedido} (aditivo)`).join('');
+  comb.status = partes.some(x=>x.status==='Em andamento') ? 'Em andamento' : partes[0].status;
+  comb._combinado = true; comb._partes = partes; comb.obraId = principal;
+  return comb;
+}
+function pedidosVisao(){
+  return state.pedidos.filter(p=> !(p.obraId && ehAditivo(obraById(p.obraId))))
+    .map(p=> p.obraId ? (pedidoVisao(p.obraId) || p) : p);
+}
+
 function custoObra(obraId){
+  const ids = idsGrupo(obraId);
   return movAtivas()
-    .filter(m=> m.obraId===obraId && (m.tipo==='Saída' || m.tipo==='Devolução'))
+    .filter(m=> ids.includes(m.obraId) && (m.tipo==='Saída' || m.tipo==='Devolução'))
     .reduce((sum,m)=>{
       const preco = precoNaMovimentacao(m);
       const sinal = m.tipo==='Devolução' ? -1 : 1;
@@ -739,8 +777,9 @@ function custoObra(obraId){
 }
 function custoObraPorVertente(obraId){
   const totais = {aluminio:0, vidro:0, acessorio:0};
+  const ids = idsGrupo(obraId);
   movAtivas()
-    .filter(m=> m.obraId===obraId && (m.tipo==='Saída' || m.tipo==='Devolução'))
+    .filter(m=> ids.includes(m.obraId) && (m.tipo==='Saída' || m.tipo==='Devolução'))
     .forEach(m=>{
       const preco = precoNaMovimentacao(m);
       const sinal = m.tipo==='Devolução' ? -1 : 1;
@@ -750,7 +789,8 @@ function custoObraPorVertente(obraId){
   return totais;
 }
 function itensObra(obraId){
-  return movAtivas().filter(m=> m.obraId===obraId && (m.tipo==='Saída' || m.tipo==='Devolução'));
+  const ids = idsGrupo(obraId);
+  return movAtivas().filter(m=> ids.includes(m.obraId) && (m.tipo==='Saída' || m.tipo==='Devolução'));
 }
 
 /* ---- FATURAMENTO ---- */
@@ -1099,12 +1139,12 @@ function fatPctNoMes(f, mes){
 function fatResumoMes(mes){
   const linhas = [];
   let valor = 0, kg = 0, m2 = 0, semValor = 0, semPeso = 0, semVidro = 0;
-  state.obras.forEach(o=>{
+  state.obras.filter(o=>!ehAditivo(o)).forEach(o=>{
     const f = state.fat.find(x=>x.obraId===o.id);
     if(!f) return;
     const { total, prod } = fatPctNoMes(f, mes);
     if(total<=0) return;
-    const ped = pedidoDaObra(o.id);
+    const ped = pedidoVisao(o.id);
     const vv = ped && ped.valorVenda!=null ? ped.valorVenda : null;
     const v = vv!=null ? vv*total/100 : 0;
     const m = (prod>0 && ped && ped.vidm2) ? ped.vidm2*prod/25 : 0;
@@ -1181,15 +1221,15 @@ function renderFatObras(){
   const mesAtual = state.fatMes || todayISO().slice(0,7);
   const busca = state.fatBusca.trim().toLowerCase();
 
-  const linhasTodas = state.obras.map(o=>{
+  const linhasTodas = state.obras.filter(o=>!ehAditivo(o)).map(o=>{
     const f = fatDaObra(o.id);
-    const ped = pedidoDaObra(o.id);
+    const ped = pedidoVisao(o.id);
     return { o, f, ped, c: fatCalc(f, ped) };
   });
   let list = linhasTodas;
   if(state.fatFiltro==='andamento') list = list.filter(r=>!r.c.finalizado);
   if(state.fatFiltro==='finalizado') list = list.filter(r=>r.c.finalizado);
-  if(busca) list = list.filter(r=> (r.o.n||'').toLowerCase().includes(busca) || (r.o.pedido||'').toLowerCase().includes(busca));
+  if(busca) list = list.filter(r=> (r.o.n||'').toLowerCase().includes(busca) || pedidosTexto(r.o).toLowerCase().includes(busca));
   list = [...list].sort((a,b)=> b.o.id - a.o.id);
 
   const qtdFinal = linhasTodas.filter(r=>r.c.finalizado).length;
@@ -1263,7 +1303,7 @@ function renderFatObras(){
         const xCell = (campo, mesCampo, checked, mes)=> `<td class="fat-mat"><label class="fat-x-lab"><input type="checkbox" data-fat-chk="${o.id}:${campo}" ${checked?'checked':''} ${dis}> X</label>
           ${checked ? fatSelMes(mes, `data-fat-mes="${o.id}:${mesCampo}"`, ed) : ''}</td>`;
         return `<tr>
-          <td><b>${esc(o.n)}</b><div style="color:var(--ink-soft);font-size:11.5px;">${esc(o.pedido||'sem nº de pedido')}</div></td>
+          <td><b>${esc(o.n)}</b><div style="color:var(--ink-soft);font-size:11.5px;">${esc(pedidosTexto(o)||'sem nº de pedido')}</div></td>
           <td class="num">${ped && ped.valorVenda!=null ? fmtMoney(ped.valorVenda) : '—'}</td>
           ${xCell('matAlu','matAluMes',f.matAlu,f.matAluMes)}
           ${xCell('matVid','matVidMes',f.matVid,f.matVidMes)}
@@ -1413,7 +1453,7 @@ function renderDashboard(){
 
 function renderMovRow(m, showActions){
   const p = produtoById(m.produtoId);
-  const destino = (m.tipo==='Saída'||m.tipo==='Devolução') ? (m.centroCusto ? centroLabel(m.centroCusto) + (m.equipe ? ' · ' + m.equipe : '') : (obraById(m.obraId)?.n || '—')) : (fornecedorById(m.fornecedorId)?.n || m.motivo || '—');
+  const destino = (m.tipo==='Saída'||m.tipo==='Devolução') ? (m.centroCusto ? centroLabel(m.centroCusto) + (m.equipe ? ' · ' + m.equipe : '') : (obraById(m.obraId)?.n ? obraById(m.obraId).n + (aditivosDe(principalDe(m.obraId)).length ? ' (Pedidos ' + pedidosTexto(obraById(m.obraId)) + ')' : '') : '—')) : (fornecedorById(m.fornecedorId)?.n || m.motivo || '—');
   const badgeClass = m.tipo==='Entrada' ? 'entrada' : (m.tipo==='Devolução' ? 'neutral' : 'saida');
   return `
   <tr ${m.cancelado?'style="opacity:.45;text-decoration:line-through;"':''}>
@@ -1519,7 +1559,7 @@ function renderMovimentacao(){
         ${f.obraId ? `
           <div style="display:flex;align-items:center;gap:8px;">
             <div style="flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:3px;background:#faf8f3;font-size:13px;">
-              <b>${esc(obraById(Number(f.obraId))?.n||'')}</b>${obraById(Number(f.obraId))?.pedido ? ` <span style="color:var(--ink-soft);font-size:11.5px;">— Pedido ${esc(obraById(Number(f.obraId)).pedido)}</span>` : ''}
+              <b>${esc(obraById(Number(f.obraId))?.n||'')}</b>${obraById(Number(f.obraId))?.pedido ? ` <span style="color:var(--ink-soft);font-size:11.5px;">— Pedido ${esc(pedidosTexto(obraById(Number(f.obraId))))}</span>` : ''}
             </div>
             <button class="secondary small" id="lote-trocar-obra">Trocar</button>
           </div>
@@ -1527,8 +1567,8 @@ function renderMovimentacao(){
           <input type="text" id="lote-obra-busca" placeholder="Buscar por nome da obra ou nº do pedido…" value="${esc(state.movLoteObraBusca)}" autocomplete="off">
           ${state.movLoteObraBusca.trim().length>0 ? (()=>{
             const busca = state.movLoteObraBusca.trim().toLowerCase();
-            const resultados = [...state.obras].filter(o=> o.n.toLowerCase().includes(busca) || (o.pedido||'').toLowerCase().includes(busca)).sort((a,b)=>a.n.localeCompare(b.n)).slice(0,8);
-            return resultados.length ? `<div class="ac-list">${resultados.map(o=>`<div class="ac-item" data-pick-obra="${o.id}"><div>${esc(o.n)}</div><div class="meta">${o.pedido?`Pedido ${esc(o.pedido)}`:'sem número de pedido'}</div></div>`).join('')}</div>` : `<div class="empty" style="padding:10px;">Nenhuma obra encontrada.</div>`;
+            const resultados = [...state.obras].filter(o=> !ehAditivo(o) && (o.n.toLowerCase().includes(busca) || pedidosTexto(o).toLowerCase().includes(busca))).sort((a,b)=>a.n.localeCompare(b.n)).slice(0,8);
+            return resultados.length ? `<div class="ac-list">${resultados.map(o=>`<div class="ac-item" data-pick-obra="${o.id}"><div>${esc(o.n)}</div><div class="meta">${o.pedido?`Pedido ${esc(pedidosTexto(o))}`:'sem número de pedido'}</div></div>`).join('')}</div>` : `<div class="empty" style="padding:10px;">Nenhuma obra encontrada.</div>`;
           })() : ''}
         `}
         ${f.tipo==='Saída' ? `<div class="hint">Não achou a obra? <span style="text-decoration:underline;cursor:pointer;" id="lote-nova-obra">cadastrar nova obra</span></div>` : ''}
@@ -1626,12 +1666,12 @@ function renderMovimentacao(){
 
 /* ---- OBRAS ---- */
 function renderObras(){
-  let rows = state.obras.map(o=>({obra:o, custo:custoObra(o.id), n:itensObra(o.id).length}));
+  let rows = state.obras.filter(o=>!ehAditivo(o)).map(o=>({obra:o, custo:custoObra(o.id), n:itensObra(o.id).length}));
   const busca = state.obrasSearch.trim().toLowerCase();
   if(busca){
     rows = rows.filter(r=>
       r.obra.n.toLowerCase().includes(busca) ||
-      (r.obra.pedido||'').toLowerCase().includes(busca)
+      pedidosTexto(r.obra).toLowerCase().includes(busca)
     );
   }
   rows.sort((a,b)=>{
@@ -1662,7 +1702,7 @@ function renderObras(){
       <div class="obra-card" ${state.modoSelecaoObras ? (podeExcluir ? `data-toggle-obra="${r.obra.id}" style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;${marcada?'border-color:var(--steel);background:#faf8f3;':''}"` : `style="display:flex;align-items:flex-start;gap:10px;opacity:.55;"`) : `data-obra="${r.obra.id}"`}>
         ${state.modoSelecaoObras ? `<input type="checkbox" data-select-obra="${r.obra.id}" ${marcada?'checked':''} ${podeExcluir?'':'disabled'} style="margin-top:3px;pointer-events:none;">` : ''}
         <div style="flex:1;">
-          <div class="nm">${esc(r.obra.n)}${r.obra.pedido ? ` <span style="font-weight:400;color:var(--ink-soft);font-size:11.5px;">· Pedido ${esc(r.obra.pedido)}</span>` : ''}</div>
+          <div class="nm">${esc(r.obra.n)}${r.obra.pedido ? ` <span style="font-weight:400;color:var(--ink-soft);font-size:11.5px;">· Pedido ${esc(pedidosTexto(r.obra))}</span>` : ''}${aditivosDe(r.obra.id).length ? ' <span class="badge neutral" style="font-size:9.5px;">com aditivo</span>' : ''}</div>
           <div class="cost">${fmtMoney(r.custo)}</div>
           <div class="items">${r.n} saída(s) de material${!pedidoDaObra(r.obra.id) ? ' <span class="badge warn" title="Esta obra não tem pedido no Comparativo — falta criar o pedido">sem pedido</span>' : ''}${state.modoSelecaoObras && !podeExcluir ? ' <span style="color:var(--amber);">— tem movimentação, não pode excluir</span>' : ''}</div>
         </div>
@@ -1705,10 +1745,12 @@ function renderObraDetail(){
 
   return `
   <div class="breadcrumb" data-nav="obras">← todas as obras</div>
+  ${aditivosDe(o.id).length ? `<div class="hint" style="margin-bottom:12px;">Esta obra tem aditivo: ${aditivosDe(o.id).map(a=>esc(a.n)+' — Pedido '+esc(a.pedido||'?')).join('; ')}. Os custos e lançamentos abaixo somam o pedido original e o(s) aditivo(s).</div>` : ''}
+  ${ehAditivo(o) ? `<div class="hint" style="margin-bottom:12px;">Esta obra é aditivo de <b>${esc(obraById(o.aditivoDe).n)}</b>; os custos são lançados na obra original.</div>` : ''}
   ${souAdmin() ? `<div style="margin-bottom:12px;"><button class="secondary small" id="editar-obra-btn">Editar obra</button> <button class="danger small" id="excluir-obra-btn">Excluir esta obra</button> <span class="hint">${movs.length===0 ? '— sem movimentações, pode excluir com segurança.' : `— tem ${movs.length} movimentação(ões); ao excluir, elas ficam sem obra vinculada (não são apagadas).`}</span></div>` : ''}
   <div class="grid-cards" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px;">
     <div class="card"><div class="k">Obra</div><div class="v" style="font-size:18px;">${esc(o.n)}</div></div>
-    <div class="card"><div class="k">Número do pedido</div><div class="v" style="font-size:18px;">${o.pedido ? esc(o.pedido) : '<span style="color:var(--ink-soft);font-size:13px;">não informado</span>'}</div></div>
+    <div class="card"><div class="k">${aditivosDe(o.id).length ? 'Pedidos (original + aditivo)' : 'Número do pedido'}</div><div class="v" style="font-size:18px;">${o.pedido ? esc(pedidosTexto(o)) : '<span style="color:var(--ink-soft);font-size:13px;">não informado</span>'}</div></div>
     <div class="card"><div class="k">Custo total de material</div><div class="v">${fmtMoney(custo)}</div></div>
     <div class="card"><div class="k">Itens diferentes usados</div><div class="v">${itens.length}</div></div>
   </div>
@@ -1813,7 +1855,7 @@ function creditoSucataMov(m){ return sucataKgMov(m) * (m.precoSucata||0); }
 function aluminioPesosObra(obraId){
   const r = {bruto:0, liquido:0, sucataKg:0, credito:0, temKg:false};
   movAtivas()
-    .filter(m=> m.obraId===obraId && (m.tipo==='Saída'||m.tipo==='Devolução') && (m.vertente||'acessorio')==='aluminio')
+    .filter(m=> idsGrupo(obraId).includes(m.obraId) && (m.tipo==='Saída'||m.tipo==='Devolução') && (m.vertente||'acessorio')==='aluminio')
     .forEach(m=>{
       if((m.kgBruto===null||m.kgBruto===undefined) && (m.kgLiquido===null||m.kgLiquido===undefined)) return;
       const s = m.tipo==='Devolução' ? -1 : 1;
@@ -1851,7 +1893,8 @@ function loteSucataTexto(){
   return `Sucata: ${fmtNum(s)} kg` + ((!isNaN(p) && p>0) ? ` × ${fmtMoney(p)} = ${fmtMoney(s*p)} de crédito` : '');
 }
 function temMovimentacaoVertente(obraId, vertente){
-  return movAtivas().some(m=> m.obraId===obraId && (m.tipo==='Saída'||m.tipo==='Devolução') && (m.vertente||'acessorio')===vertente);
+  const ids = idsGrupo(obraId);
+  return movAtivas().some(m=> ids.includes(m.obraId) && (m.tipo==='Saída'||m.tipo==='Devolução') && (m.vertente||'acessorio')===vertente);
 }
 function aluminioReal(ped){
   // só usa o valor calculado das movimentações se já existir pelo menos um lançamento
@@ -1904,7 +1947,7 @@ function badgeDeltaPeso(sist, real){
 }
 
 function renderComparativo(){
-  let list = [...state.pedidos];
+  let list = pedidosVisao();
   if(state.compFiltro==='andamento') list = list.filter(p=>p.status==='Em andamento');
   if(state.compFiltro==='finalizada') list = list.filter(p=>p.status==='Finalizada');
   if(state.compFiltro==='vinculados') list = list.filter(p=>p.obraId);
@@ -1921,7 +1964,7 @@ function renderComparativo(){
   list.sort((a,b)=> b.id - a.id);
 
   const semVinculo = state.pedidos.filter(p=>!p.obraId).length;
-  const estourou = state.pedidos.filter(p=>{
+  const estourou = pedidosVisao().filter(p=>{
     const d = deltaPct(p.cmvsis, cmvRealCalc(p));
     return d!==null && d>10;
   }).length;
@@ -2219,8 +2262,9 @@ function renderVinculos(){
 }
 
 function renderPedidoDetail(){
-  const p = state.pedidos.find(x=>x.id===state.pedidoSelecionado);
-  if(!p){ state.pedidoSelecionado=null; return renderComparativo(); }
+  const p0 = state.pedidos.find(x=>x.id===state.pedidoSelecionado);
+  if(!p0){ state.pedidoSelecionado=null; return renderComparativo(); }
+  const p = p0.obraId ? (pedidoVisao(p0.obraId) || p0) : p0;
   const obra = p.obraId ? obraById(p.obraId) : null;
   const alumReal = aluminioReal(p);
   const vidReal = vidroReal(p);
@@ -2254,7 +2298,7 @@ function renderPedidoDetail(){
 
   <!-- seção "Faturamento" temporariamente oculta aqui no Comparativo (segue em construção) -->
 
-  <section>
+${p._combinado ? `` : `  <section>
     <div class="section-head"><h2>Vincular a uma obra do estoque</h2></div>
     <div class="form-card" style="max-width:480px;padding:16px 18px;">
       <div class="hint" style="margin-bottom:8px;">O custo real de acessório vem das movimentações registradas no estoque quando o pedido está vinculado a uma obra. Sem vínculo, usamos o valor importado da planilha de controle de custos.${p.autoVinculo ? ' Este vínculo foi <b>sugerido automaticamente</b> pelo nome — confirme se está certo.' : ''}</div>
@@ -2263,7 +2307,7 @@ function renderPedidoDetail(){
         ${state.obras.map(o=>`<option value="${o.id}" ${p.obraId===o.id?'selected':''}>${esc(o.n)}</option>`).join('')}
       </select>
     </div>
-  </section>
+  </section>`}
 
   <section>
     <div class="section-head"><h2>Custo — Sistema × Real</h2></div>
@@ -2312,7 +2356,7 @@ function renderPedidoDetail(){
     </div>
   </section>
 
-  <section>
+${p._combinado ? `<section><div class="hint">Este pedido soma o original e o(s) aditivo(s): os valores acima são a soma dos pedidos. Para alterar valores de venda, peso ou custo do sistema, use <b>Editar obra</b> dentro de Obras, na obra original ou no aditivo.</div></section>` : `  <section>
     <div class="section-head"><h2>Editar valores importados</h2></div>
     <div class="form-card">
       <div class="form-row-2">
@@ -2340,7 +2384,7 @@ function renderPedidoDetail(){
       </div>
       ${souAdmin() ? '<div class="form-actions"><button id="ped-save">Salvar valores</button></div>' : ''}
     </div>
-  </section>
+  </section>`}
   `;
 }
 
@@ -2576,6 +2620,10 @@ function renderObraEditModal(o){
       <h3>Editar obra</h3>
       ${!pedidoDaObra(o.id) ? `<div class="hint" style="background:#fbf1de;padding:8px 10px;border-radius:3px;margin-bottom:12px;">Esta obra ainda não tem pedido no Comparativo. Ao salvar, o pedido é criado com estes dados.</div>` : ''}
       <div class="form-row"><label>Nome da obra / cliente *</label><input type="text" id="oe-nome" value="${esc(o.n)}"></div>
+      ${aditivosDe(o.id).length===0 ? `<div class="form-row"><label>Este pedido é aditivo de outra obra?</label>
+        <select id="oe-aditivo"><option value="">Não — é uma obra independente</option>
+          ${[...state.obras].filter(x=>x.id!==o.id && !ehAditivo(x)).sort((a,b)=>(a.n||'').localeCompare(b.n||'')).map(x=>`<option value="${x.id}" ${o.aditivoDe===x.id?'selected':''}>${esc(x.n)}${x.pedido?' — '+esc(x.pedido):''}</option>`).join('')}
+        </select></div>` : `<div class="hint" style="margin-bottom:10px;">Esta obra já tem aditivo(s) vinculado(s), então não pode ser aditivo de outra.</div>`}
       <div class="form-row-2">
         <div class="form-row"><label>Número do pedido *</label><input type="text" id="oe-pedido" value="${esc(o.pedido||'')}"></div>
         <div class="form-row"><label>Valor de venda (R$)</label><input type="number" step="0.01" id="oe-valorvenda" value="${v(p.valorVenda)}"></div>
@@ -2626,7 +2674,10 @@ async function salvarEdicaoObra(){
   if(btn){ btn.disabled = true; btn.textContent = 'Salvando…'; }
   state.saving = true; updateSaveIndicator();
 
-  const novaObra = { ...o, n: nome, pedido };
+  const adSel = document.getElementById('oe-aditivo');
+  const novoAd = adSel ? (adSel.value ? Number(adSel.value) : null) : (o.aditivoDe || null);
+  if(novoAd && (novoAd===o.id || ehAditivo(obraById(novoAd)))){ state.salvandoObra=false; state.saving=false; updateSaveIndicator(); if(btn){ btn.disabled=false; btn.textContent='Salvar alterações'; } showToast('Escolha uma obra original (que não seja aditivo) para vincular.', 'error'); return; }
+  const novaObra = { ...o, n: nome, pedido, aditivoDe: novoAd };
   let ped = pedidoDaObra(o.id);
   let novoPed;
   let erro = null;
@@ -2832,6 +2883,10 @@ function renderObraModal(){
       <h3>Nova obra</h3>
       <div class="form-row"><label>Nome da obra / cliente *</label><input type="text" id="of-nome" placeholder="ex: Obra João da Silva" required></div>
       <div class="form-row"><label>Número do pedido *</label><input type="text" id="of-pedido" placeholder="ex: 540-2025" required></div>
+      ${souAdmin() ? `<div class="form-row"><label>Este pedido é aditivo de outra obra? (opcional)</label>
+        <select id="of-aditivo"><option value="">Não — é uma obra nova</option>
+          ${[...state.obras].filter(x=>!ehAditivo(x)).sort((a,b)=>(a.n||'').localeCompare(b.n||'')).map(x=>`<option value="${x.id}">${esc(x.n)}${x.pedido?' — '+esc(x.pedido):''}</option>`).join('')}
+        </select></div>` : ''}
       <div class="form-row"><label>Valor de venda (R$)</label><input type="number" step="0.01" id="of-valorvenda" placeholder="0,00"></div>
       <div class="hint" style="margin:-8px 0 14px 0;">Obra e pedido são a mesma coisa: nome e número do pedido são obrigatórios, e o mesmo número de pedido não pode ser cadastrado duas vezes. O valor de venda pode ser preenchido depois, se ainda não tiver.</div>
 
@@ -3680,7 +3735,14 @@ async function salvarObra(){
     return; // a tela de cadastro continua aberta, com o que foi digitado
   }
 
-  const nova = { id: data.obra_id, n: nome, st: 'Ativa', pedido: pedido, listasCorte: [] };
+  const nova = { id: data.obra_id, n: nome, st: 'Ativa', pedido: pedido, listasCorte: [], aditivoDe: null };
+  const adEl = document.getElementById('of-aditivo');
+  const adId = adEl && adEl.value ? Number(adEl.value) : null;
+  if(adId){
+    const { error: eAd } = await sbClient.from('obras').update({ aditivo_de: adId }).eq('id', nova.id);
+    if(eAd){ console.error(eAd); showToast('Obra cadastrada, mas o vínculo de aditivo falhou: ' + eAd.message + ' (rode o SQL add_aditivo_obras.sql)', 'error'); }
+    else nova.aditivoDe = adId;
+  }
   state.obras.push(nova);
   state.pedidos.push({
     id: data.pedido_id, ped: `${nome} — Pedido ${pedido}`, status: 'Em andamento',
@@ -3691,7 +3753,7 @@ async function salvarObra(){
     obraId: nova.id, autoVinculo: false, valorVenda: valorVenda, etapasFaturamento: []
   });
   state.modal = null;
-  if(state.view==='movimentacao'){ state.movLote.obraId = nova.id; }
+  if(state.view==='movimentacao'){ state.movLote.obraId = principalDe(nova.id); }
   showToast('Obra e pedido cadastrados.');
   render();
 }
