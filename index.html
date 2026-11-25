@@ -332,7 +332,7 @@ let state = {
   compSearch: '',
   fatMesFiltro: '',
   obraVisao: 'lancamentos',
-  fat: [], fatErro: null, fatFiltro: 'todos', fatBusca: '', fatMes: '',
+  fat: [], fatErro: null, fatFiltro: 'todos', fatBusca: '', fatMes: '', fatAno: '',
   obraParaVincular: null,
   vinculoBusca: '',
   vinculosListaBusca: '',
@@ -366,6 +366,8 @@ let state = {
   movLoteListaCorte: '',
   movLoteVertente: 'acessorio',
   equipes: [],
+  config: { custoFixo: null, mediaFaturada: null },
+  configErro: null,
   centroAba: 'INSTALACAO',
   centroMes: todayISO().slice(0,7),
   movLoteKgBruto: '',
@@ -533,16 +535,17 @@ async function fetchAll(table, mapper){
 }
 
 async function loadAll(){
-  const [p,o,f,m,pe,ft,eq] = await Promise.all([
+  const [p,o,f,m,pe,ft,eq,cfg] = await Promise.all([
     fetchAll('produtos', rowToProduto),
     fetchAll('obras', rowToObra),
     fetchAll('fornecedores', rowToFornecedor),
     fetchAll('movimentacoes', rowToMov),
     fetchAll('pedidos', rowToPed),
     fetchFat(),
-    fetchAll('equipes', rowToEquipe)
+    fetchAll('equipes', rowToEquipe),
+    fetchConfig()
   ]);
-  state.produtos = p; state.obras = o; state.fornecedores = f; state.movimentacoes = m; state.pedidos = pe; state.fat = ft; state.equipes = eq;
+  state.produtos = p; state.obras = o; state.fornecedores = f; state.movimentacoes = m; state.pedidos = pe; state.fat = ft; state.equipes = eq; state.config = cfg;
   state.precisaImportar = (p.length===0 && o.length===0);
   state.loaded = true;
   render();
@@ -982,7 +985,7 @@ function renderSidebar(){
   const reposicaoCount = itensReposicao().length;
   // temporariamente escondidas do menu pra todo mundo (em construção) — o código continua
   // funcionando por baixo, é só reaparecer aqui quando quiser reativar.
-  const ABAS_TEMP_OCULTAS = ['necessidade','vinculos'].concat((souFabrica()||souCompras()) ? ['faturamento'] : []);
+  const ABAS_TEMP_OCULTAS = ['necessidade','vinculos'].concat((souFabrica()||souCompras()) ? ['faturamento','faturadas'] : []);
   let items = [
     ['dashboard','Painel','◆'],
     ['estoque','Estoque','▤'],
@@ -990,12 +993,14 @@ function renderSidebar(){
     ['obras','Obras · Centro de Custos','⌂'],
     ['comparativo','Comparativo Sistema × Real','⇌'],
     ['faturamento','Faturamento','$'],
+    ['faturadas','Obras faturadas','✓'],
     ['necessidade','Necessidade de Material','◧'],
     ['vinculos','Vínculos Pendentes','⚭'],
     ['historico','Histórico','☰'],
     ['fornecedores','Fornecedores','⊞'],
   ];
   items.splice(4, 0, ['centros','Produção & Instalação','⚒']);
+  if(souAdmin()) items.splice(items.findIndex(i=>i[0]==='faturamento')+1, 0, ['saude','Saúde financeira','♥']);
   if(souAdmin()) items.push(['config','Configurações','⚙']);
   const OCULTAS_FAB = souFabrica() ? ['centros'] : [];
   items = items.filter(([id])=> !ABAS_TEMP_OCULTAS.includes(id) && !OCULTAS_FAB.includes(id));
@@ -1039,7 +1044,9 @@ function renderTopbar(){
     historico:['Histórico de movimentações','Todas as entradas e saídas'],
     fornecedores:['Fornecedores','Cadastro de fornecedores'],
     centros:['Produção & Instalação','Consumo de material por centro de custo e por equipe, mês a mês'],
-    config:['Configurações','Equipes de instalação']
+    config:['Configurações','Equipes de instalação'],
+    faturadas:['Obras faturadas','Fechamento de cada mês: Material, Produção e Instalação, kg e m²'],
+    saude:['Saúde financeira','O que ainda falta faturar, o material que falta gastar e quanto tempo leva para terminar']
   };
   const [t,s] = titles[state.view] || ['',''];
   return `
@@ -1069,6 +1076,8 @@ function renderView(){
     case 'fornecedores': return renderFornecedores();
     case 'centros': return souFabrica() ? renderDashboard() : renderCentros();
     case 'config': return souAdmin() ? renderConfig() : renderDashboard();
+    case 'saude': return souAdmin() ? renderSaude() : renderDashboard();
+    case 'faturadas': return (souFabrica()||souCompras()) ? renderDashboard() : renderObrasFaturadas();
     default: return '';
   }
 }
@@ -1282,7 +1291,6 @@ function fatFechamentoHtml(mes, R, custoTotal){
     ${caixa(cor.mat,'MATERIAL faturado', R.valMat, [`Alumínio: <b>${fmtMoney(R.valAlu)}</b>`,`Vidro: <b>${fmtMoney(R.valVid)}</b>`,`Acessório: <b>${fmtMoney(R.valAce)}</b>`])}
     ${caixa(cor.prod,'PRODUÇÃO faturada', R.valProd, [`Kg produzido: <b>${fmtNum(R.kg)} kg</b>`,`m² de vidro produzido: <b>${fmtNum(R.m2vid)} m²</b>`])}
     ${caixa(cor.inst,'INSTALAÇÃO faturada', R.valInst, [`m² instalado: <b>${R.m2inst ? fmtNum(R.m2inst)+' m²' : '—'}</b>`, R.semM2inst ? `<span style="color:var(--amber);">${R.semM2inst} obra(s) sem m² de instalação cadastrado</span>` : 'esquadrias × instalação do mês ÷ 25%'])}
-    <div class="card"><div class="k">Custo estimado p/ terminar (todas as obras)</div><div class="v amber" style="font-size:20px;">${fmtMoney(custoTotal)}</div><div class="foot">material ainda não faturado, pelo custo sistema</div></div>
   </div>
   ${(R.semValor||R.semPeso||R.semVidro) ? `<div class="hint" style="margin-bottom:10px;">Atenção neste mês:
     ${R.semValor?`${R.semValor} obra(s) sem valor de venda (não somam em R$). `:''}
@@ -1322,9 +1330,46 @@ function fatFechamentoHtml(mes, R, custoTotal){
   </details>`;
 }
 
+function renderObrasFaturadas(){
+  const mesAtual = state.fatMes || todayISO().slice(0,7);
+  const ano = state.fatAno || mesAtual.slice(0,4);
+  const resumo = fatResumoMes(mesAtual);
+  const nomes = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  const meses = nomes.map((n,i)=>{
+    const v = `${ano}-${String(i+1).padStart(2,'0')}`;
+    return { v, nome:n, r: fatResumoMes(v) };
+  });
+  const tot = meses.reduce((s,m)=>{
+    ['valor','valMat','valProd','valInst','kg','m2vid','m2inst'].forEach(k=>{ s[k] += m.r[k]||0; });
+    s.obras += m.r.linhas.length; return s;
+  }, { valor:0, valMat:0, valProd:0, valInst:0, kg:0, m2vid:0, m2inst:0, obras:0 });
+  const anos = []; for(let y=2025;y<=2028;y++) anos.push(String(y));
+  return `
+  ${fatFechamentoHtml(mesAtual, resumo, 0)}
+
+  <div class="toolbar" style="margin-top:22px;margin-bottom:8px;">
+    <div style="font-weight:600;font-size:14px;">Ano mês a mês</div>
+    <select id="fat-ano">${anos.map(y=>`<option value="${y}" ${y===ano?'selected':''}>${y}</option>`).join('')}</select>
+    <div style="margin-left:auto;color:var(--ink-soft);font-size:12px;">clique em um mês para abrir o fechamento dele</div>
+  </div>
+  <div class="table-wrap" style="overflow-x:auto;"><table>
+    <thead><tr><th>Mês</th><th class="num">Obras</th><th class="num">Material</th><th class="num">Produção</th><th class="num">Instalação</th><th class="num">Total faturado</th><th class="num">Kg prod.</th><th class="num">m² vidro</th><th class="num">m² inst.</th></tr></thead>
+    <tbody>
+      ${meses.map(m=>`<tr data-fat-mes-pick="${m.v}" style="cursor:pointer;${m.v===mesAtual?'background:#faf8f3;':''}">
+        <td><b>${m.nome}</b></td><td class="num">${m.r.linhas.length||'—'}</td>
+        <td class="num">${m.r.valMat?fmtMoney(m.r.valMat):'—'}</td><td class="num">${m.r.valProd?fmtMoney(m.r.valProd):'—'}</td><td class="num">${m.r.valInst?fmtMoney(m.r.valInst):'—'}</td>
+        <td class="num"><b>${m.r.valor?fmtMoney(m.r.valor):'—'}</b></td>
+        <td class="num">${m.r.kg?fmtNum(m.r.kg):'—'}</td><td class="num">${m.r.m2vid?fmtNum(m.r.m2vid):'—'}</td><td class="num">${m.r.m2inst?fmtNum(m.r.m2inst):'—'}</td></tr>`).join('')}
+      <tr style="font-weight:600;background:#faf8f3;"><td>Total ${ano}</td><td class="num">${tot.obras}</td>
+        <td class="num">${fmtMoney(tot.valMat)}</td><td class="num">${fmtMoney(tot.valProd)}</td><td class="num">${fmtMoney(tot.valInst)}</td><td class="num">${fmtMoney(tot.valor)}</td>
+        <td class="num">${fmtNum(tot.kg)}</td><td class="num">${fmtNum(tot.m2vid)}</td><td class="num">${tot.m2inst?fmtNum(tot.m2inst):'—'}</td></tr>
+    </tbody>
+  </table></div>
+  <div class="hint" style="margin-top:8px;">A coluna "Obras" conta cada obra em cada mês em que ela teve faturamento. O mesmo trabalho faturado em dois meses aparece nos dois.</div>`;
+}
+
 function renderFatObras(){
   const ed = souAdmin();
-  const mesAtual = state.fatMes || todayISO().slice(0,7);
   const busca = state.fatBusca.trim().toLowerCase();
 
   const linhasTodas = state.obras.filter(o=>!ehAditivo(o)).map(o=>{
@@ -1340,7 +1385,6 @@ function renderFatObras(){
 
   const qtdFinal = linhasTodas.filter(r=>r.c.finalizado).length;
   const custoTotal = linhasTodas.reduce((s,r)=> s + (r.c.custoEst||0), 0);
-  const resumo = fatResumoMes(mesAtual);
   const semMes = linhasTodas.filter(r=>{
     const f = r.f;
     return (f.matAlu && !f.matAluMes) || (f.matVid && !f.matVidMes) || (f.matAce && !f.matAceMes)
@@ -1352,7 +1396,7 @@ function renderFatObras(){
     A tabela de faturamento ainda não existe no banco (${esc(state.fatErro)}). Rode o arquivo <b>criar_tabela_faturamento.sql</b> no SQL Editor do Supabase e recarregue a página.</div>` : ''}
   ${!ed ? `<div class="hint" style="margin-bottom:14px;">Somente o administrador edita o faturamento. Você está só visualizando.</div>` : ''}
 
-  ${fatFechamentoHtml(mesAtual, resumo, custoTotal)}
+  <div class="hint" style="margin-bottom:12px;">Aqui você lança o faturamento. O fechamento de cada mês (valores por Material, Produção e Instalação, kg e m²) está na aba <span style="text-decoration:underline;cursor:pointer;" data-nav="faturadas">Obras faturadas</span>.</div>
 
   <div class="toolbar">
     <input type="text" class="search-input" id="fat-search" placeholder="Buscar por obra ou nº do pedido…" value="${esc(state.fatBusca)}">
@@ -1414,7 +1458,12 @@ function attachFatEvents(){
     el.addEventListener('click', ()=>{ state.fatFiltro = el.getAttribute('data-fatfilt'); render(); });
   });
   const rm = document.getElementById('fat-resumo-mes');
-  if(rm) rm.addEventListener('change', e=>{ state.fatMes = e.target.value; render(); });
+  if(rm) rm.addEventListener('change', e=>{ state.fatMes = e.target.value; state.fatAno = e.target.value.slice(0,4); render(); });
+  const fAno = document.getElementById('fat-ano');
+  if(fAno) fAno.addEventListener('change', e=>{ state.fatAno = e.target.value; render(); });
+  $root.querySelectorAll('[data-fat-mes-pick]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.fatMes = el.getAttribute('data-fat-mes-pick'); render(); window.scrollTo && window.scrollTo(0,0); });
+  });
 
   $root.querySelectorAll('[data-fat-chk]').forEach(el=>{
     el.addEventListener('change', ()=>{
@@ -2693,6 +2742,129 @@ async function excluirEquipe(id){
   state.equipes = state.equipes.filter(x=>x.id!==id); render();
 }
 
+/* ================= SAÚDE FINANCEIRA ================= */
+async function fetchConfig(){
+  const vazio = { custoFixo: null, mediaFaturada: null };
+  try{
+    const { data, error } = await sbClient.from('configuracoes').select('*');
+    if(error){ console.warn('configuracoes:', error.message); state.configErro = error.message; return vazio; }
+    state.configErro = null;
+    const g = k => { const r = data.find(x=>x.chave===k); return r && r.valor!==null ? Number(r.valor) : null; };
+    return { custoFixo: g('custo_fixo'), mediaFaturada: g('media_faturada') };
+  }catch(e){ state.configErro = String(e.message||e); return vazio; }
+}
+async function salvarConfig(chave, texto){
+  if(!souAdmin()) return;
+  const t = String(texto).trim().replace(',','.');
+  const v = t==='' ? null : parseFloat(t);
+  if(v!==null && (isNaN(v) || v<0)){ showToast('Número inválido.', 'error'); render(); return; }
+  state.saving = true; updateSaveIndicator();
+  const { error } = await sbClient.from('configuracoes').upsert([{ chave, valor: v }]);
+  state.saving = false; updateSaveIndicator();
+  if(error){ showToast('Erro ao salvar: ' + error.message + ' (rode o SQL add_saude_financeira.sql)', 'error'); return; }
+  if(chave==='custo_fixo') state.config.custoFixo = v; else state.config.mediaFaturada = v;
+  render();
+}
+// O que ainda falta faturar e o material que ainda falta gastar, de todas as obras com menos de 100% faturado.
+function saudeFinanceira(){
+  const R = { aFaturar:0, obrasAbertas:0, semValor:[], semCusto:[], alu:0, aluKg:0, vid:0, vidM2:0, ace:0, linhas:[] };
+  state.obras.filter(o=>!ehAditivo(o)).forEach(o=>{
+    const f = fatDaObra(o.id);
+    const ped = pedidoVisao(o.id);
+    const c = fatCalc(f, ped);
+    if(c.finalizado) return;
+    R.obrasAbertas++;
+    const falta = Math.max(0, 100 - c.total);
+    const vv = ped && ped.valorVenda!=null ? ped.valorVenda : null;
+    let aF = 0;
+    if(vv===null) R.semValor.push(o.n); else aF = vv*falta/100;
+    const temCusto = ped && (ped.casis!=null || ped.cvsis!=null || ped.caesis!=null);
+    if(!temCusto) R.semCusto.push(o.n);
+    const alu = (!f.matAlu && ped) ? (ped.casis||0) : 0;
+    const aluKg = (!f.matAlu && ped) ? (ped.abkg||0) : 0;
+    const vid = (!f.matVid && ped) ? (ped.cvsis||0) : 0;
+    const vidM2 = (!f.matVid && ped) ? (ped.vidm2||0) : 0;
+    const ace = (!f.matAce && ped) ? (ped.caesis||0) : 0;
+    R.aFaturar += aF; R.alu += alu; R.aluKg += aluKg; R.vid += vid; R.vidM2 += vidM2; R.ace += ace;
+    R.linhas.push({ obra:o, pct:c.total, aFaturar:aF, semValor:vv===null, alu, aluKg, vid, vidM2, ace });
+  });
+  R.material = R.alu + R.vid + R.ace;
+  R.linhas.sort((a,b)=> b.aFaturar - a.aFaturar);
+  return R;
+}
+function renderSaude(){
+  const R = saudeFinanceira();
+  const cfg = state.config || {};
+  const fixo = cfg.custoFixo, media = cfg.mediaFaturada;
+  const meses = (media && media>0) ? R.aFaturar / media : null;
+  const fixoPeriodo = (meses!==null && fixo!==null) ? meses * fixo : null;
+  const resultado = fixoPeriodo!==null ? R.aFaturar - R.material - fixoPeriodo : null;
+  const cor = { mat:'#3d6f8f', fat:'#3f7d52', tempo:'#c8792a' };
+  const caixa = (titulo, valor, linhas, cr)=>`
+    <div class="card" style="border-top:3px solid ${cr||'#3d4451'};">
+      <div class="k">${titulo}</div><div class="v" style="font-size:20px;">${valor}</div>
+      <div class="foot" style="line-height:1.6;">${linhas.join('<br>')}</div>
+    </div>`;
+  return `
+  ${state.configErro ? `<div class="hint" style="background:#f3dede;color:#a13c3c;padding:10px 12px;border-radius:3px;margin-bottom:14px;">
+    Para guardar o custo fixo e a média, rode o arquivo <b>add_saude_financeira.sql</b> no Supabase e recarregue a página (${esc(state.configErro)}).</div>` : ''}
+
+  <div class="section-head"><h2>1. Quanto ainda falta faturar</h2></div>
+  <div class="grid-cards" style="margin-bottom:8px;">
+    ${caixa('Valor de Venda a Faturar', fmtMoney(R.aFaturar), [`${R.obrasAbertas} obra(s) com menos de 100% faturado`, 'é o que ainda falta <b>faturar</b>, não o que o cliente ainda vai pagar'], cor.fat)}
+  </div>
+  ${R.semValor.length ? `<div class="hint" style="background:#fbf1de;padding:10px 12px;border-radius:3px;margin-bottom:14px;"><b>Atenção:</b> ${R.semValor.length} obra(s) em aberto sem valor de venda cadastrado, então não somam no total acima: ${R.semValor.map(esc).join(', ')}. Cadastre o valor em Obras → Editar obra.</div>` : ''}
+
+  <div class="section-head" style="margin-top:18px;"><h2>2. Material que ainda falta gastar para terminar</h2></div>
+  <div class="grid-cards" style="margin-bottom:8px;">
+    ${caixa('Alumínio', fmtMoney(R.alu), [`<b>${fmtNum(R.aluKg)} kg</b> (peso bruto)`], cor.mat)}
+    ${caixa('Vidro', fmtMoney(R.vid), [`<b>${fmtNum(R.vidM2)} m²</b>`], cor.mat)}
+    ${caixa('Acessório', fmtMoney(R.ace), ['somente valor'], cor.mat)}
+    ${caixa('Material total', fmtMoney(R.material), ['pelo custo do sistema, só do que ainda não foi faturado como material'], '#3d4451')}
+  </div>
+  ${R.semCusto.length ? `<div class="hint" style="margin-bottom:14px;">${R.semCusto.length} obra(s) em aberto sem custo do sistema cadastrado (não entram no material): ${R.semCusto.map(esc).join(', ')}.</div>` : ''}
+
+  <div class="section-head" style="margin-top:18px;"><h2>3. Quanto tempo leva para terminar tudo</h2></div>
+  <div class="form-card" style="max-width:760px;padding:16px 18px;">
+    <div class="hint" style="margin-bottom:12px;">Preencha estes dois números. Eles ficam salvos e você muda quando quiser.</div>
+    <div class="form-row-2">
+      <div class="form-row"><label>Média de valor faturado por mês (R$)</label><input type="number" step="0.01" min="0" id="saude-media" value="${media ?? ''}" placeholder="0,00"></div>
+      <div class="form-row"><label>Custo fixo mensal (R$)</label><input type="number" step="0.01" min="0" id="saude-fixo" value="${fixo ?? ''}" placeholder="0,00"></div>
+    </div>
+    ${meses===null ? '<div class="hint">Preencha a média de valor faturado por mês para ver o prazo.</div>' : `
+    <div class="grid-cards" style="grid-template-columns:repeat(2,1fr);margin-top:6px;">
+      ${caixa('Meses para terminar tudo', `${fmtNum(meses)} meses`, [`${fmtMoney(R.aFaturar)} ÷ ${fmtMoney(media)} por mês`], cor.tempo)}
+      ${fixoPeriodo===null ? caixa('Custo fixo até terminar', '—', ['preencha o custo fixo mensal'], cor.tempo) : caixa('Custo fixo até terminar', fmtMoney(fixoPeriodo), [`${fmtNum(meses)} meses × ${fmtMoney(fixo)}`], cor.tempo)}
+    </div>
+    ${resultado!==null ? `
+    <div class="hint" style="margin-top:10px;line-height:1.7;">
+      <b>Resultado projetado do que ainda falta</b> (estimativa): ${fmtMoney(R.aFaturar)} a faturar − ${fmtMoney(R.material)} de material − ${fmtMoney(fixoPeriodo)} de custo fixo = <b style="color:${resultado>=0?'var(--green)':'#a13c3c'};">${fmtMoney(resultado)}</b>.
+      Não inclui outros custos (como mão de obra que não esteja no custo fixo).</div>` : ''}`}
+  </div>
+
+  ${R.linhas.length ? `
+  <details style="margin-top:16px;"><summary style="cursor:pointer;font-size:12.5px;color:var(--ink-soft);">Ver obra por obra (${R.linhas.length})</summary>
+    <div class="table-wrap" style="margin-top:8px;overflow-x:auto;"><table>
+      <thead><tr><th>Obra</th><th class="num">% faturado</th><th class="num">A faturar</th><th class="num">Alumínio</th><th class="num">kg</th><th class="num">Vidro</th><th class="num">m²</th><th class="num">Acessório</th></tr></thead>
+      <tbody>${R.linhas.map(l=>`<tr>
+        <td><b>${esc(l.obra.n)}</b><div style="color:var(--ink-soft);font-size:11.5px;">${esc(pedidosTexto(l.obra))}</div></td>
+        <td class="num">${fmtNum(l.pct)}%</td>
+        <td class="num">${l.semValor ? '<span class="badge warn">sem valor</span>' : fmtMoney(l.aFaturar)}</td>
+        <td class="num">${l.alu?fmtMoney(l.alu):'—'}</td><td class="num">${l.aluKg?fmtNum(l.aluKg):'—'}</td>
+        <td class="num">${l.vid?fmtMoney(l.vid):'—'}</td><td class="num">${l.vidM2?fmtNum(l.vidM2):'—'}</td>
+        <td class="num">${l.ace?fmtMoney(l.ace):'—'}</td></tr>`).join('')}</tbody>
+    </table></div>
+  </details>` : ''}
+
+  <details style="margin:16px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--ink-soft);">Como estes números são calculados</summary>
+    <div class="hint" style="margin-top:8px;line-height:1.7;">
+      <b>Valor de Venda a Faturar</b> = para cada obra com menos de 100% faturado, valor de venda × (100% − % já faturado). Obras com aditivo somam o pedido original e o aditivo.<br>
+      <b>Material a gastar</b> = custo do sistema do alumínio, vidro e acessório, só do que ainda não tem o X de material marcado na aba Faturamento. O kg é o peso bruto do sistema; o vidro vem em m².<br>
+      <b>Meses para terminar</b> = Valor de Venda a Faturar ÷ média de valor faturado por mês (número que você preenche). <b>Custo fixo até terminar</b> = meses × custo fixo mensal.
+    </div>
+  </details>`;
+}
+
 /* ---- MODAL ---- */
 
 /* ---- EDITAR OBRA (obra + pedido juntos) ---- */
@@ -3413,6 +3585,10 @@ function attachEvents(){
   if(cfgNome) cfgNome.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); adicionarEquipe(); } });
   $root.querySelectorAll('[data-eq-toggle]').forEach(el=>{ el.addEventListener('click', ()=> alternarEquipe(Number(el.getAttribute('data-eq-toggle')))); });
   $root.querySelectorAll('[data-eq-del]').forEach(el=>{ el.addEventListener('click', ()=> excluirEquipe(Number(el.getAttribute('data-eq-del')))); });
+  ['saude-fixo','saude-media'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('change', ()=> salvarConfig(id==='saude-fixo' ? 'custo_fixo' : 'media_faturada', el.value));
+  });
   const cMes = document.getElementById('centro-mes');
   if(cMes) cMes.addEventListener('change', e=>{ state.centroMes = e.target.value; render(); });
   $root.querySelectorAll('[data-centro-aba]').forEach(el=>{ el.addEventListener('click', ()=>{ state.centroAba = el.getAttribute('data-centro-aba'); render(); }); });
