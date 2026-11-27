@@ -729,8 +729,8 @@ async function fetchCores(){
     return data.map(r=>r.nome).sort((a,b)=>a.localeCompare(b));
   }catch(e){ return []; }
 }
-// vertente 'aluminio_obra' = alumínio comprado para a obra (sem estoque): cor + kg + valor por kg
-function aluObraAtivo(){ const f = state.movLote; return f.tipo==='Saída' && !f.centro && state.movLoteVertente==='aluminio_obra'; }
+// vertente 'aluminio' (Saída p/ obra) = alumínio comprado para a obra (sem estoque): cor + kg + valor por kg
+function aluObraAtivo(){ const f = state.movLote; return f.tipo==='Saída' && !f.centro && state.movLoteVertente==='aluminio'; }
 function obraById(id){ return state.obras.find(o=>o.id===id); }
 function fornecedorById(id){ return state.fornecedores.find(f=>f.id===id); }
 
@@ -1678,7 +1678,6 @@ function renderEstoque(){
 
 /* ---- MOVIMENTAÇÃO ---- */
 function renderMovimentacao(){
-  if(state.movLoteVertente==='aluminio_obra' && !(state.movLote.tipo==='Saída' && !state.movLote.centro)) state.movLoteVertente = 'aluminio';
   const aluObra = aluObraAtivo();
   const f = state.movLote;
   const acList = (state.movLoteBusca.trim().length>0 && !state.movLoteProdutoSel) ? state.produtos
@@ -1804,7 +1803,6 @@ function renderMovimentacao(){
           <label>Vertente</label>
           <select id="lote-item-vertente">
             ${Object.entries(VERTENTES).map(([code,v])=>`<option value="${code}" ${state.movLoteVertente===code?'selected':''}>${v.label}</option>`).join('')}
-            ${f.tipo==='Saída' && !f.centro ? `<option value="aluminio_obra" ${aluObra?'selected':''}>Alumínio comprado p/ a obra</option>` : ''}
           </select>
         </div>` : ''}
         ${f.tipo==='Saída'||f.tipo==='Devolução' ? `
