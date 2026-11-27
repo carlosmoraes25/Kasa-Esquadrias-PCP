@@ -1754,8 +1754,8 @@ function renderMovimentacao(){
           ${!state.movLoteProdutoSel && state.movLoteBusca.trim().length>1 && acList.length===0 ? `<div class="hint">Não achou "${esc(state.movLoteBusca.trim())}"? <span style="text-decoration:underline;cursor:pointer;" id="lote-novo-produto">cadastrar esse produto</span></div>` : ''}
         </div>
         <div class="form-row" style="margin-bottom:0;">
-          <label>Qtd.${state.movLoteProdutoSel ? ` (${unidadeLabel(state.movLoteProdutoSel.u)})` : ''}</label>
-          <input type="number" id="lote-item-qtd" min="0" step="0.001" value="${esc(state.movLoteQtd)}" placeholder="0">
+          <label>Qtd.${state.movLoteProdutoSel ? ` (${unidadeLabel(state.movLoteProdutoSel.u)})` : ''}${qtdAutoBruto() ? ' = KG bruto' : ''}</label>
+          <input type="number" id="lote-item-qtd" min="0" step="0.001" value="${esc(qtdAutoBruto() ? state.movLoteKgBruto : state.movLoteQtd)}" placeholder="0" ${qtdAutoBruto() ? 'readonly title="Para alumínio em kg, a quantidade é o KG bruto (preencha abaixo)"' : ''}>
         </div>
         ${f.tipo==='Saída' && f.naoAfetaEstoque ? `
         <div class="form-row" style="margin-bottom:0;">
@@ -2456,6 +2456,44 @@ function renderVinculos(){
   `;
 }
 
+function alumDetalheHtml(p){
+  if(!p.obraId) return '';
+  const movs = itensObra(p.obraId).filter(m=>(m.vertente||'acessorio')==='aluminio').sort((a,b)=>new Date(a.data)-new Date(b.data));
+  if(!movs.length){
+    return `<section><div class="section-head"><h2>De onde vem o alumínio real</h2></div>
+      <div class="hint">Nenhum lançamento de alumínio nesta obra. O alumínio real mostrado (${fmtMoney(p.careal||0)}) é o valor importado da planilha.</div></section>`;
+  }
+  const grupo = idsGrupo(p.obraId).length>1;
+  let bruto = 0, cred = 0;
+  const linhas = movs.map(m=>{
+    const preco = precoNaMovimentacao(m), s = m.tipo==='Devolução' ? -1 : 1;
+    const valor = s*preco*m.qtd, c = s*creditoSucataMov(m);
+    bruto += valor; cred += c;
+    const pr = produtoById(m.produtoId);
+    return `<tr>
+      <td>${esc(fmtDate(m.data))}</td>
+      <td>${esc(pr?pr.n:'(produto removido)')}${grupo?`<div style="color:var(--ink-soft);font-size:11px;">${esc(obraById(m.obraId)?.n||'')}</div>`:''}</td>
+      <td>${esc(m.tipo)}</td>
+      <td class="num">${fmtQtd(m.qtd, pr?pr.u:'un')}</td>
+      <td class="num">${fmtMoney(preco)}</td>
+      <td class="num">${fmtMoney(valor)}</td>
+      <td class="num">${m.kgBruto!==null&&m.kgBruto!==undefined ? fmtNum(m.kgBruto)+' / '+fmtNum(m.kgLiquido) : '—'}</td>
+      <td class="num">${c ? fmtMoney(c) : '—'}</td>
+    </tr>`;
+  }).join('');
+  return `<section>
+    <div class="section-head"><h2>De onde vem o alumínio real (lançamento por lançamento)</h2></div>
+    <div class="table-wrap" style="overflow-x:auto;"><table>
+      <thead><tr><th>Data</th><th>Produto</th><th>Tipo</th><th class="num">Qtd.</th><th class="num">Preço</th><th class="num">Valor (qtd × preço)</th><th class="num">Kg bruto / líq.</th><th class="num">Crédito sucata</th></tr></thead>
+      <tbody>${linhas}
+        <tr style="font-weight:600;background:#faf8f3;"><td colspan="5">Alumínio lançado (bruto)</td><td class="num">${fmtMoney(bruto)}</td><td class="num">Sucata</td><td class="num">${fmtMoney(cred)}</td></tr>
+        <tr style="font-weight:600;"><td colspan="5">Alumínio real = bruto − crédito da sucata</td><td class="num">${fmtMoney(bruto - cred)}</td><td></td><td></td></tr>
+      </tbody>
+    </table></div>
+    <div class="hint" style="margin-top:8px;">Valor = quantidade × preço do produto no dia do lançamento (o kg não entra no valor). Devoluções aparecem negativas.</div>
+  </section>`;
+}
+
 function renderPedidoDetail(){
   const p0 = state.pedidos.find(x=>x.id===state.pedidoSelecionado);
   if(!p0){ state.pedidoSelecionado=null; return renderComparativo(); }
@@ -2522,6 +2560,8 @@ ${p._combinado ? `` : `  <section>
       </tbody>
     </table></div>
   </section>
+
+  ${alumDetalheHtml(p)}
 
   <section>
     <div class="section-head"><h2>Peso e vidro — previsto (sistema) × real (dos lançamentos de alumínio)</h2></div>
@@ -3090,6 +3130,7 @@ function renderMovModal(m){
         <div class="form-row"><label>KG líquido (só alumínio)</label><input type="number" step="0.001" min="0" id="mv-kgl" value="${m.kgLiquido??''}"></div>
       </div>
       <div class="form-row"><label>Valor da sucata (R$/kg)</label><input type="number" step="0.01" min="0" id="mv-psuc" value="${m.precoSucata??''}"></div>
+      <div class="hint" style="margin:-6px 0 10px 0;">Alumínio em kg: ao salvar, a quantidade passa a ser igual ao KG bruto (é o que sai do estoque e é cobrado).</div>
       <div class="hint">${m.naoAfetaEstoque
         ? 'Este lançamento não descontou do estoque, então mudar a quantidade não altera o saldo.'
         : 'Se mudar a quantidade, o saldo do estoque é ajustado automaticamente pela diferença.'}</div>
@@ -3104,7 +3145,7 @@ function salvarEdicaoMov(){
   if(!podeEditarMov()) return;
   const mov = state.modal && state.modal.editing;
   if(!mov || mov.cancelado) return;
-  const qtd = parseFloat(String(document.getElementById('mv-qtd').value).replace(',','.'));
+  let qtd = parseFloat(String(document.getElementById('mv-qtd').value).replace(',','.'));
   const precoRaw = String(document.getElementById('mv-preco').value).trim().replace(',','.');
   const preco = precoRaw==='' ? null : parseFloat(precoRaw);
   const obraId = mov.centroCusto ? null : Number(document.getElementById('mv-obra').value);
@@ -3125,6 +3166,8 @@ function salvarEdicaoMov(){
   }
 
   const produto = produtoById(mov.produtoId);
+  // perfil de alumínio em kg: a quantidade passa a ser o KG bruto
+  if(vertente==='aluminio' && kgBruto!==null && produtoEmKg(produto)) qtd = kgBruto;
   const diff = round3(qtd - mov.qtd);
   if(produto && diff!==0 && !mov.naoAfetaEstoque){
     // Saída: mais quantidade = sai mais do estoque. Devolução: mais quantidade = volta mais.
@@ -3728,6 +3771,10 @@ function attachEvents(){
     if(!el) return;
     el.addEventListener('input', e=>{
       state[key] = e.target.value;
+      if(key==='movLoteKgBruto' && qtdAutoBruto()){
+        state.movLoteQtd = e.target.value;
+        const q = document.getElementById('lote-item-qtd'); if(q) q.value = e.target.value;
+      }
       const c = document.getElementById('lote-sucata-calc');
       if(c) c.textContent = loteSucataTexto();
     });
@@ -3783,11 +3830,17 @@ function nextItemLoteId(){
   const itens = state.movLote.itens;
   return itens.length ? Math.max(...itens.map(i=>i.id))+1 : 1;
 }
+// Alumínio em kg: a quantidade que sai do estoque (e que é cobrada) é o KG bruto
+function produtoEmKg(p){ return !!p && /^kg$/i.test(String(p.u||'').trim()); }
+function qtdAutoBruto(){
+  const f = state.movLote;
+  return f.tipo==='Saída' && !f.centro && state.movLoteVertente==='aluminio' && produtoEmKg(state.movLoteProdutoSel);
+}
+
 function adicionarItemLote(){
   const p = state.movLoteProdutoSel;
   if(!p){ showToast('Selecione um produto.', 'error'); return; }
-  const qtd = parseFloat(state.movLoteQtd);
-  if(!qtd || qtd<=0){ showToast('Informe uma quantidade válida.', 'error'); return; }
+  let qtd = parseFloat(state.movLoteQtd);
   const precoManualTxt = state.movLoteItemPreco.trim();
   const precoManual = precoManualTxt ? parseFloat(precoManualTxt) : null;
 
@@ -3804,7 +3857,10 @@ function adicionarItemLote(){
     if(kgBruto!==null && kgLiquido>kgBruto){ showToast('O KG líquido não pode ser maior que o KG bruto.', 'error'); return; }
     if(obrig && kgBruto!==null && (kgBruto-kgLiquido)>0 && !(precoSucata>0)){ showToast('Informe o valor da sucata (R$/kg).', 'error'); return; }
     if(precoSucata>0){ try{ localStorage.setItem('kasa_preco_sucata', String(precoSucata)); }catch(e){} }
+    // perfil em kg: a quantidade é o KG bruto (o que saiu do estoque e foi pago)
+    if(kgBruto!==null && produtoEmKg(p)) qtd = kgBruto;
   }
+  if(!qtd || qtd<=0){ showToast('Informe uma quantidade válida.', 'error'); return; }
   state.movLote.itens.push({
     id: nextItemLoteId(),
     produtoId: p.id,
