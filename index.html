@@ -1045,7 +1045,7 @@ function renderTopbar(){
     historico:['Histórico de movimentações','Todas as entradas e saídas'],
     fornecedores:['Fornecedores','Cadastro de fornecedores'],
     centros:['Produção & Instalação','Consumo de material por centro de custo e por equipe, mês a mês'],
-    config:['Configurações','Equipes de instalação'],
+    config:['Configurações','Equipes de instalação e revisão de lançamentos'],
     faturadas:['Obras faturadas','Fechamento de cada mês: Material, Produção e Instalação, kg e m²'],
     saude:['Saúde financeira','O que ainda falta faturar, o material que falta gastar e quanto tempo leva para terminar']
   };
@@ -2786,6 +2786,64 @@ function renderCentros(){
     </table></div>
   </section>`).join('')}`}`;
 }
+// Lançamentos de alumínio em kg em que a quantidade é diferente do KG bruto (erro de digitação antigo)
+function revisaoAluminio(){
+  return movAtivas()
+    .filter(m=> (m.tipo==='Saída'||m.tipo==='Devolução') && (m.vertente||'acessorio')==='aluminio'
+      && m.kgBruto!==null && m.kgBruto!==undefined && produtoEmKg(produtoById(m.produtoId))
+      && round3(m.qtd) !== round3(m.kgBruto))
+    .map(m=>({ m, p: produtoById(m.produtoId) }))
+    .sort((a,b)=> new Date(b.m.data) - new Date(a.m.data));
+}
+async function corrigirAluminio(ids){
+  if(!souAdmin()) return;
+  const lista = revisaoAluminio().filter(x=> ids.includes(x.m.id));
+  if(!lista.length) return;
+  const prods = new Map();
+  lista.forEach(({m,p})=>{
+    const diff = round3(m.kgBruto - m.qtd);
+    if(!m.naoAfetaEstoque && p){ p.q = round3(p.q + (m.tipo==='Devolução' ? diff : -diff)); prods.set(p.id, p); }
+    m.qtd = m.kgBruto;
+    const marca = `Qtd. corrigida para o KG bruto por ${state.perfil?.email||'?'} em ${todayISO()}`;
+    m.motivo = m.motivo ? (m.motivo + ' | ' + marca) : marca;
+  });
+  state.saving = true; updateSaveIndicator();
+  try{
+    const jobs = [sbClient.from('movimentacoes').upsert(lista.map(x=>movToRow(x.m)))];
+    if(prods.size) jobs.push(sbClient.from('produtos').upsert([...prods.values()].map(ROW_MAPPERS.produtos)));
+    const rs = await Promise.all(jobs);
+    const erro = rs.find(r=>r && r.error);
+    if(erro){ console.error(erro.error); showToast('Erro ao salvar: ' + erro.error.message, 'error'); }
+    else showToast(`${lista.length} lançamento(s) corrigido(s).`);
+  }catch(e){ console.error(e); showToast('Erro ao salvar.', 'error'); }
+  state.saving = false; updateSaveIndicator();
+  render();
+}
+function renderRevisaoAluminio(){
+  const rev = revisaoAluminio();
+  return `
+  <section style="margin-top:26px;">
+    <div class="section-head"><h2>Revisar lançamentos de alumínio</h2></div>
+    <div class="form-card" style="padding:16px 18px;">
+      <div class="hint" style="margin-bottom:10px;">Mostra lançamentos de alumínio em kg em que a <b>quantidade é diferente do KG bruto</b>. Para esses, o custo foi calculado sobre a quantidade e não sobre o bruto. Ao corrigir, a quantidade passa a ser o KG bruto, e o estoque do produto acompanha (a diferença sai, ou volta no caso de devolução).</div>
+      ${rev.length===0 ? '<div class="empty" style="padding:14px;">Nenhum lançamento para revisar.</div>' : `
+      <div style="margin-bottom:10px;"><button id="alu-fix-all">Corrigir todos (${rev.length})</button></div>
+      <div class="table-wrap" style="overflow-x:auto;"><table>
+        <thead><tr><th>Data</th><th>Obra</th><th>Produto</th><th>Tipo</th><th class="num">Qtd. atual</th><th class="num">KG bruto</th><th class="num">Diferença no estoque</th><th></th></tr></thead>
+        <tbody>${rev.map(({m,p})=>{
+          const diff = round3(m.kgBruto - m.qtd);
+          return `<tr>
+            <td>${esc(fmtDate(m.data))}</td>
+            <td>${esc(obraById(m.obraId)?.n || (m.centroCusto ? centroLabel(m.centroCusto) : '—'))}</td>
+            <td>${esc(p?p.n:'(produto removido)')}</td><td>${esc(m.tipo)}</td>
+            <td class="num">${fmtNum(m.qtd)} kg</td><td class="num">${fmtNum(m.kgBruto)} kg</td>
+            <td class="num">${m.naoAfetaEstoque ? '<span style="color:var(--ink-soft);">não mexe no estoque</span>' : (m.tipo==='Devolução' ? '+' : '−') + fmtNum(Math.abs(diff)) + ' kg'}</td>
+            <td><button class="secondary small" data-alu-fix="${m.id}">Corrigir</button></td>
+          </tr>`;}).join('')}</tbody>
+      </table></div>`}
+    </div>
+  </section>`;
+}
 function renderConfig(){
   const eqs = state.equipes.filter(e=>e.centro==='INSTALACAO').sort((a,b)=>a.nome.localeCompare(b.nome));
   return `
@@ -2810,7 +2868,8 @@ function renderConfig(){
         </tbody>
       </table></div>
     </div>
-  </section>`;
+  </section>
+  ${renderRevisaoAluminio()}`;
 }
 async function adicionarEquipe(){
   if(!souAdmin()) return;
@@ -3706,6 +3765,12 @@ function attachEvents(){
   });
   const loteEquipe = document.getElementById('lote-equipe');
   if(loteEquipe) loteEquipe.addEventListener('change', e=>{ state.movLote.equipe = e.target.value; });
+  $root.querySelectorAll('[data-alu-fix]').forEach(el=>{ el.addEventListener('click', ()=> corrigirAluminio([Number(el.getAttribute('data-alu-fix'))])); });
+  const aluFixAll = document.getElementById('alu-fix-all');
+  if(aluFixAll) aluFixAll.addEventListener('click', ()=>{
+    const ids = revisaoAluminio().map(x=>x.m.id);
+    if(confirm(`Corrigir ${ids.length} lançamento(s)? A quantidade vira o KG bruto e o estoque dos produtos é ajustado.`)) corrigirAluminio(ids);
+  });
   const cfgAdd = document.getElementById('cfg-eq-add');
   if(cfgAdd) cfgAdd.addEventListener('click', adicionarEquipe);
   const cfgNome = document.getElementById('cfg-eq-nome');
